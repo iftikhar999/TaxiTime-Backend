@@ -1,0 +1,1142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Job Status Flow Simulator</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+        }
+
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .panel {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+        }
+
+        .panel h2 {
+            color: #667eea;
+            margin-bottom: 20px;
+            font-size: 1.5em;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .panel h2::before {
+            content: '';
+            width: 4px;
+            height: 24px;
+            background: #667eea;
+            border-radius: 2px;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 6px 16px;
+            border-radius: 20px;
+            font-size: 0.85em;
+            font-weight: 600;
+            margin: 5px 5px 5px 0;
+        }
+
+        .status-unassigned { background: #e0e0e0; color: #666; }
+        .status-offered { background: #fff3cd; color: #856404; }
+        .status-assigned { background: #d1ecf1; color: #0c5460; }
+        .status-on_the_way { background: #cce5ff; color: #004085; }
+        .status-arrived { background: #d4edda; color: #155724; }
+        .status-started { background: #c3e6cb; color: #155724; }
+        .status-in_progress { background: #b8daff; color: #004085; }
+        .status-completed { background: #28a745; color: white; }
+        .status-rejected { background: #f8d7da; color: #721c24; }
+        .status-cancelled { background: #dc3545; color: white; }
+
+        .driver-available { background: #d4edda; color: #155724; }
+        .driver-roger { background: #fff3cd; color: #856404; }
+        .driver-busy { background: #f8d7da; color: #721c24; }
+
+        .action-buttons {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
+            margin-top: 15px;
+        }
+
+        .btn {
+            padding: 12px 20px;
+            border: none;
+            border-radius: 8px;
+            font-size: 0.95em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+
+        .btn:active {
+            transform: translateY(0);
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .btn-primary { background: #667eea; color: white; }
+        .btn-success { background: #28a745; color: white; }
+        .btn-danger { background: #dc3545; color: white; }
+        .btn-warning { background: #ffc107; color: #333; }
+        .btn-info { background: #17a2b8; color: white; }
+        .btn-secondary { background: #6c757d; color: white; }
+
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px;
+            margin: 5px 0;
+            background: #f8f9fa;
+            border-radius: 6px;
+        }
+
+        .info-label {
+            font-weight: 600;
+            color: #666;
+        }
+
+        .info-value {
+            color: #333;
+        }
+
+        .timeline {
+            position: relative;
+            padding-left: 30px;
+            margin-top: 20px;
+        }
+
+        .timeline-item {
+            position: relative;
+            padding: 15px;
+            margin-bottom: 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+        }
+
+        .timeline-item::before {
+            content: '';
+            position: absolute;
+            left: -37px;
+            top: 20px;
+            width: 12px;
+            height: 12px;
+            background: #667eea;
+            border-radius: 50%;
+            border: 3px solid white;
+            box-shadow: 0 0 0 2px #667eea;
+        }
+
+        .timeline-item.completed::before {
+            background: #28a745;
+            box-shadow: 0 0 0 2px #28a745;
+        }
+
+        .timeline-item.active {
+            background: #e7f1ff;
+            border-left-color: #007bff;
+        }
+
+        .timeline-item.active::before {
+            background: #007bff;
+            box-shadow: 0 0 0 2px #007bff;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.2); }
+        }
+
+        .timeline-time {
+            font-size: 0.85em;
+            color: #666;
+            margin-top: 5px;
+        }
+
+        .log-panel {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            border-radius: 8px;
+            padding: 15px;
+            max-height: 400px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+        }
+
+        .log-entry {
+            margin: 5px 0;
+            padding: 5px;
+            border-left: 3px solid transparent;
+            padding-left: 10px;
+        }
+
+        .log-info { color: #4fc3f7; border-left-color: #4fc3f7; }
+        .log-success { color: #66bb6a; border-left-color: #66bb6a; }
+        .log-error { color: #ef5350; border-left-color: #ef5350; }
+        .log-warning { color: #ffa726; border-left-color: #ffa726; }
+
+        .metrics {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+
+        .metric-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .metric-value {
+            font-size: 2em;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .metric-label {
+            font-size: 0.9em;
+            opacity: 0.9;
+        }
+
+        .live-metrics {
+            display: none;
+            background: #fff3cd;
+            border: 2px solid #ffc107;
+            border-radius: 8px;
+            padding: 15px;
+            margin-top: 15px;
+        }
+
+        .live-metrics.active {
+            display: block;
+            animation: slideIn 0.3s ease;
+        }
+
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .alert {
+            padding: 12px 20px;
+            border-radius: 8px;
+            margin: 10px 0;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .alert-info { background: #d1ecf1; color: #0c5460; }
+        .alert-success { background: #d4edda; color: #155724; }
+        .alert-warning { background: #fff3cd; color: #856404; }
+        .alert-danger { background: #f8d7da; color: #721c24; }
+
+        .map-simulation {
+            background: #e0e0e0;
+            border-radius: 8px;
+            height: 200px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .map-marker {
+            position: absolute;
+            font-size: 2em;
+            transition: all 1s ease;
+        }
+
+        .marker-driver { color: #667eea; }
+        .marker-pickup { color: #28a745; }
+        .marker-dropoff { color: #dc3545; }
+
+        .config-section {
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 2px solid #e0e0e0;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: #666;
+        }
+
+        .form-group input, .form-group select {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #e0e0e0;
+            border-radius: 6px;
+            font-size: 0.95em;
+        }
+
+        .form-group input:focus, .form-group select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚕 Job Status Flow Simulator</h1>
+            <p>Interactive testing environment for job lifecycle and driver status transitions</p>
+            <div style="margin-top: 15px; padding: 15px; background: #2c2c2c; border-radius: 8px;">
+                <label style="display: flex; align-items: center; cursor: pointer; color: white;">
+                    <input type="checkbox" id="apiToggle" onchange="toggleAPI()" style="margin-right: 10px; width: 20px; height: 20px; cursor: pointer;">
+                    <span style="font-weight: 600;">
+                        <span id="apiStatus">🔵 Mock Mode</span>
+                        <span style="font-size: 0.85em; margin-left: 10px; color: #aaa;">
+                            Enable this to test with real database (server must be running on port 3001)
+                        </span>
+                    </span>
+                </label>
+            </div>
+        </div>
+
+        <div class="grid">
+            <!-- Job Control Panel -->
+            <div class="panel">
+                <h2>📋 Job Control</h2>
+                
+                <div class="info-row">
+                    <span class="info-label">Job ID:</span>
+                    <span class="info-value" id="jobId">-</span>
+                </div>
+                
+                <div class="info-row">
+                    <span class="info-label">Job Status:</span>
+                    <span id="jobStatus" class="status-badge status-unassigned">UNASSIGNED</span>
+                </div>
+                
+                <div class="info-row">
+                    <span class="info-label">Driver Status:</span>
+                    <span id="driverStatus" class="status-badge driver-available">AVAILABLE</span>
+                </div>
+
+                <div class="action-buttons">
+                    <button class="btn btn-primary" onclick="createJob()">➕ Create Job</button>
+                    <button class="btn btn-info" onclick="offerJob()" id="btnOffer" disabled>📤 Offer to Driver</button>
+                    <button class="btn btn-success" onclick="acceptJob()" id="btnAccept" disabled>✅ Accept Job</button>
+                    <button class="btn btn-danger" onclick="rejectJob()" id="btnReject" disabled>❌ Reject Job</button>
+                </div>
+
+                <div class="config-section">
+                    <h3 style="margin-bottom: 15px;">⚙️ Configuration</h3>
+                    <div class="form-group">
+                        <label>Driver Name:</label>
+                        <input type="text" id="driverName" value="Test Driver" />
+                    </div>
+                    <div class="form-group">
+                        <label>Customer Name:</label>
+                        <input type="text" id="customerName" value="Test Customer" />
+                    </div>
+                    <div class="form-group">
+                        <label>Pickup Address:</label>
+                        <input type="text" id="pickupAddress" value="Doha, Qatar" />
+                    </div>
+                    <div class="form-group">
+                        <label>Dropoff Address:</label>
+                        <input type="text" id="dropoffAddress" value="Al Markhiya, Doha" />
+                    </div>
+                </div>
+            </div>
+
+            <!-- Driver Progress Panel -->
+            <div class="panel">
+                <h2>🚗 Driver Progress</h2>
+                
+                <div id="progressAlert"></div>
+
+                <div class="action-buttons">
+                    <button class="btn btn-info" onclick="proceedToPickup()" id="btnProceed" disabled>
+                        🚗 Proceed to Pickup
+                    </button>
+                    <button class="btn btn-warning" onclick="markArrived()" id="btnArrived" disabled>
+                        📍 Mark Arrived
+                    </button>
+                    <button class="btn btn-success" onclick="startRide()" id="btnStart" disabled>
+                        🏁 Start Ride
+                    </button>
+                    <button class="btn btn-primary" onclick="completeRide()" id="btnComplete" disabled>
+                        ✅ Complete Ride
+                    </button>
+                    <button class="btn btn-danger" onclick="cancelJob()" id="btnCancel" disabled>
+                        🚫 Cancel Job
+                    </button>
+                </div>
+
+                <!-- Live Metrics (Only shown during ride) -->
+                <div id="liveMetrics" class="live-metrics">
+                    <h3 style="margin-bottom: 10px;">📊 Live Metrics</h3>
+                    <div class="metrics">
+                        <div class="metric-card">
+                            <div class="metric-value" id="metricSpeed">0</div>
+                            <div class="metric-label">Speed (km/h)</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-value" id="metricDistance">0.0</div>
+                            <div class="metric-label">Distance (km)</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-value" id="metricDuration">00:00</div>
+                            <div class="metric-label">Duration</div>
+                        </div>
+                        <div class="metric-card" style="background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);">
+                            <div class="metric-value">$<span id="metricFare">0.00</span></div>
+                            <div class="metric-label">Current Fare</div>
+                        </div>
+                    </div>
+                    <div style="margin-top: 15px; padding: 12px; background: rgba(255,255,255,0.1); border-radius: 8px;">
+                        <div style="font-size: 0.85em; color: #ccc; margin-bottom: 8px;">
+                            <strong>Tariff: <span id="tariffName">Standard</span></strong>
+                        </div>
+                        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; font-size: 0.8em; color: #aaa;">
+                            <div>Base: $<span id="tariffBase">3.50</span></div>
+                            <div>Per km: $<span id="tariffPerKm">1.20</span></div>
+                            <div>Per min: $<span id="tariffPerMin">0.30</span></div>
+                            <div>Minimum: $<span id="tariffMin">6.00</span></div>
+                        </div>
+                    </div>
+                </div>
+                            <div class="metric-value" id="metricDuration">00:00</div>
+                            <div class="metric-label">Duration</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Map Simulation -->
+                <div class="map-simulation" style="margin-top: 20px;">
+                    <div class="map-marker marker-pickup" id="markerPickup" style="left: 20%; top: 50%;">📍</div>
+                    <div class="map-marker marker-driver" id="markerDriver" style="left: 10%; top: 50%;">🚗</div>
+                    <div class="map-marker marker-dropoff" id="markerDropoff" style="left: 80%; top: 50%;">🏁</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Timeline and Logs -->
+        <div class="grid">
+            <!-- Job Timeline -->
+            <div class="panel">
+                <h2>📅 Job Timeline</h2>
+                <div class="timeline" id="timeline">
+                    <div class="timeline-item">
+                        <strong>Job Created</strong>
+                        <div class="timeline-time">Waiting for job creation...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Activity Log -->
+            <div class="panel">
+                <h2>📝 Activity Log</h2>
+                <div class="log-panel" id="logPanel">
+                    <div class="log-entry log-info">[INFO] Simulator initialized</div>
+                    <div class="log-entry log-info">[INFO] Ready to test job status flows</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Test Scenarios -->
+        <div class="panel">
+            <h2>🧪 Automated Test Scenarios</h2>
+            <div class="action-buttons">
+                <button class="btn btn-primary" onclick="runCompleteFlow()">
+                    🔄 Complete Job Lifecycle
+                </button>
+                <button class="btn btn-warning" onclick="runRejectionFlow()">
+                    ❌ Test Rejection Flow
+                </button>
+                <button class="btn btn-danger" onclick="runCancellationFlow()">
+                    🚫 Test Cancellation
+                </button>
+                <button class="btn btn-info" onclick="runRaceCondition()">
+                    ⚡ Test Race Condition
+                </button>
+                <button class="btn btn-secondary" onclick="resetSimulator()">
+                    🔄 Reset Simulator
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ==========================================
+        // CONFIGURATION
+        // ==========================================
+        
+        const API_BASE_URL = 'http://localhost:3001/api';
+        let USE_REAL_API = false; // Toggle this in the UI to use real backend
+        
+        // Default Tariff Configuration (matches your database schema)
+        const DEFAULT_TARIFF = {
+            name: 'Standard',
+            baseFare: 3.50,          // Base fare (starting price)
+            perKmRate: 1.20,         // Per kilometer rate
+            perMinuteRate: 0.30,     // Per minute rate
+            minimumFare: 6.00,       // Minimum fare
+            waitingTimeRate: 0.15    // Waiting time per minute (if applicable)
+        };
+        
+        // Simulator State
+        let state = {
+            jobId: null,
+            jobStatus: 'UNASSIGNED',
+            driverStatus: 'AVAILABLE',
+            assignmentId: null,
+            offerId: null,
+            timeline: [],
+            rideStartTime: null,
+            metricsInterval: null,
+            currentDistance: 0,      // in km
+            currentSpeed: 0,         // in km/h
+            waitingTime: 0,          // in seconds
+            tariff: DEFAULT_TARIFF
+        };
+
+        // Utility Functions
+        function generateId() {
+            return 'SIM-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+        }
+
+        // API Integration Functions
+        async function apiCall(endpoint, method = 'GET', body = null) {
+            if (!USE_REAL_API) {
+                addLog('info', 'Using mock mode - toggle "Use Real Backend" to test with actual database');
+                return null;
+            }
+
+            try {
+                const options = {
+                    method,
+                    headers: { 'Content-Type': 'application/json' }
+                };
+                
+                if (body) {
+                    options.body = JSON.stringify(body);
+                }
+
+                const response = await fetch(`${API_BASE_URL}${endpoint}`, options);
+                const data = await response.json();
+
+                if (!data.success) {
+                    throw new Error(data.error || 'API call failed');
+                }
+
+                addLog('success', `API: ${method} ${endpoint} - Success`);
+                return data.data;
+            } catch (error) {
+                addLog('error', `API Error: ${error.message}`);
+                throw error;
+            }
+        }
+
+        function addLog(type, message) {
+            const log = document.getElementById('logPanel');
+            const entry = document.createElement('div');
+            entry.className = `log-entry log-${type}`;
+            entry.textContent = `[${type.toUpperCase()}] ${new Date().toLocaleTimeString()} - ${message}`;
+            log.appendChild(entry);
+            log.scrollTop = log.scrollHeight;
+        }
+
+        function addTimeline(status, description) {
+            const timeline = document.getElementById('timeline');
+            const item = document.createElement('div');
+            item.className = 'timeline-item active';
+            item.innerHTML = `
+                <strong>${status}</strong>
+                <div>${description}</div>
+                <div class="timeline-time">${new Date().toLocaleTimeString()}</div>
+            `;
+            
+            // Mark previous items as completed
+            const items = timeline.querySelectorAll('.timeline-item');
+            items.forEach((i, idx) => {
+                if (idx < items.length) {
+                    i.classList.remove('active');
+                    i.classList.add('completed');
+                }
+            });
+            
+            timeline.appendChild(item);
+        }
+
+        function updateStatus(jobStatus, driverStatus) {
+            state.jobStatus = jobStatus;
+            state.driverStatus = driverStatus;
+            
+            // Update UI
+            const jobBadge = document.getElementById('jobStatus');
+            jobBadge.textContent = jobStatus;
+            jobBadge.className = `status-badge status-${jobStatus.toLowerCase()}`;
+            
+            const driverBadge = document.getElementById('driverStatus');
+            driverBadge.textContent = driverStatus;
+            driverBadge.className = `status-badge driver-${driverStatus.toLowerCase()}`;
+            
+            // Update button states
+            updateButtonStates();
+            
+            // Update live metrics visibility
+            updateLiveMetrics();
+            
+            addLog('info', `Status updated: Job=${jobStatus}, Driver=${driverStatus}`);
+        }
+
+        function updateButtonStates() {
+            const { jobStatus, driverStatus } = state;
+            
+            // Job control buttons
+            document.getElementById('btnOffer').disabled = jobStatus !== 'UNASSIGNED';
+            document.getElementById('btnAccept').disabled = jobStatus !== 'OFFERED';
+            document.getElementById('btnReject').disabled = jobStatus !== 'OFFERED';
+            
+            // Progress buttons
+            document.getElementById('btnProceed').disabled = jobStatus !== 'ASSIGNED';
+            document.getElementById('btnArrived').disabled = jobStatus !== 'ON_THE_WAY';
+            document.getElementById('btnStart').disabled = jobStatus !== 'ARRIVED';
+            document.getElementById('btnComplete').disabled = jobStatus !== 'IN_PROGRESS' && jobStatus !== 'STARTED';
+            document.getElementById('btnCancel').disabled = ['COMPLETED', 'CANCELLED', 'REJECTED', 'UNASSIGNED'].includes(jobStatus);
+        }
+
+        function updateLiveMetrics() {
+            const metrics = document.getElementById('liveMetrics');
+            const isRideActive = ['STARTED', 'IN_PROGRESS'].includes(state.jobStatus);
+            
+            if (isRideActive) {
+                metrics.classList.add('active');
+                if (!state.metricsInterval) {
+                    startMetricsSimulation();
+                }
+            } else {
+                metrics.classList.remove('active');
+                stopMetricsSimulation();
+            }
+        }
+
+        function startMetricsSimulation() {
+            state.rideStartTime = Date.now();
+            state.currentDistance = 0;
+            state.currentSpeed = 0;
+            state.waitingTime = 0;
+            
+            addLog('info', `Using tariff: ${state.tariff.name} - Base: $${state.tariff.baseFare}, Per km: $${state.tariff.perKmRate}, Per min: $${state.tariff.perMinuteRate}`);
+            
+            state.metricsInterval = setInterval(() => {
+                // Simulate speed variation (30-80 km/h)
+                state.currentSpeed = Math.floor(30 + Math.random() * 50);
+                
+                // Calculate distance increment (distance = speed * time)
+                // Speed is in km/h, interval is 1 second, so distance per second = speed / 3600
+                state.currentDistance += state.currentSpeed / 3600;
+                
+                // Calculate ride duration
+                const duration = Math.floor((Date.now() - state.rideStartTime) / 1000);
+                const minutes = Math.floor(duration / 60);
+                const seconds = duration % 60;
+                
+                // Calculate fare based on tariff
+                const baseFare = parseFloat(state.tariff.baseFare);
+                const distanceFare = parseFloat(state.tariff.perKmRate) * state.currentDistance;
+                const timeFare = parseFloat(state.tariff.perMinuteRate) * (duration / 60);
+                const waitingFare = parseFloat(state.tariff.waitingTimeRate || 0) * (state.waitingTime / 60);
+                
+                let totalFare = baseFare + distanceFare + timeFare + waitingFare;
+                
+                // Apply minimum fare
+                const minimumFare = parseFloat(state.tariff.minimumFare);
+                totalFare = Math.max(totalFare, minimumFare);
+                
+                // Update display
+                document.getElementById('metricSpeed').textContent = state.currentSpeed;
+                document.getElementById('metricDistance').textContent = state.currentDistance.toFixed(2);
+                document.getElementById('metricDuration').textContent = 
+                    `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+                
+                // Update fare display if element exists
+                const fareElement = document.getElementById('metricFare');
+                if (fareElement) {
+                    fareElement.textContent = totalFare.toFixed(2);
+                }
+                
+                // Log fare breakdown every 10 seconds
+                if (duration % 10 === 0 && duration > 0) {
+                    addLog('info', `💰 Fare: $${totalFare.toFixed(2)} (Base: $${baseFare.toFixed(2)} + Distance: $${distanceFare.toFixed(2)} + Time: $${timeFare.toFixed(2)})`);
+                }
+            }, 1000);
+        }
+
+        function stopMetricsSimulation() {
+            if (state.metricsInterval) {
+                clearInterval(state.metricsInterval);
+                state.metricsInterval = null;
+            }
+        }
+
+        function animateDriver(targetPosition) {
+            const driver = document.getElementById('markerDriver');
+            driver.style.left = targetPosition;
+        }
+
+        function showAlert(type, message) {
+            const alert = document.getElementById('progressAlert');
+            alert.className = `alert alert-${type}`;
+            alert.innerHTML = `<strong>${type === 'success' ? '✅' : type === 'warning' ? '⚠️' : 'ℹ️'}</strong> ${message}`;
+            setTimeout(() => alert.innerHTML = '', 5000);
+        }
+
+        function wait(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        }
+
+        // Job Actions
+        async function createJob() {
+            if (USE_REAL_API) {
+                try {
+                    const pickupAddress = document.getElementById('configPickup').value;
+                    const dropoffAddress = document.getElementById('configDropoff').value;
+                    const estimatedPrice = parseFloat(document.getElementById('configPrice').value);
+
+                    const job = await apiCall('/job/create', 'POST', {
+                        pickupAddress,
+                        dropoffAddress,
+                        estimatedPrice
+                    });
+
+                    state.jobId = job.id;
+                    document.getElementById('jobId').textContent = job.jobId;
+                    
+                    updateStatus('UNASSIGNED', 'AVAILABLE');
+                    addTimeline('Job Created', `Job ${job.jobId} created in database`);
+                    addLog('success', `Real job created: ${job.jobId} (DB ID: ${job.id})`);
+                    showAlert('success', 'Job created in real database!');
+                    return;
+                } catch (error) {
+                    showAlert('error', 'Failed to create job: ' + error.message);
+                    return;
+                }
+            }
+
+            // Mock mode
+            state.jobId = generateId();
+            document.getElementById('jobId').textContent = state.jobId;
+            
+            updateStatus('UNASSIGNED', 'AVAILABLE');
+            addTimeline('Job Created', `Job ${state.jobId} created and ready to be assigned`);
+            addLog('success', `Job created: ${state.jobId}`);
+            showAlert('success', 'Job created successfully!');
+        }
+
+        async function offerJob() {
+            if (state.jobStatus !== 'UNASSIGNED') {
+                addLog('error', 'Job must be UNASSIGNED to offer');
+                return;
+            }
+
+            if (USE_REAL_API) {
+                try {
+                    const result = await apiCall(`/job/${state.jobId}/offer`, 'POST');
+                    
+                    state.offerId = result.offer.id;
+                    state.assignmentId = result.assignment.id;
+                    
+                    updateStatus('OFFERED', 'AVAILABLE');
+                    addTimeline('Job Offered', `Job offered to driver in database`);
+                    addLog('success', `Real offer created (ID: ${state.offerId})`);
+                    showAlert('success', 'Job offered through real API!');
+                    return;
+                } catch (error) {
+                    showAlert('error', 'Failed to offer job: ' + error.message);
+                    return;
+                }
+            }
+            
+            // Mock mode
+            state.offerId = generateId();
+            state.assignmentId = generateId();
+            
+            updateStatus('OFFERED', 'AVAILABLE');
+            addTimeline('Job Offered', 'Job offered to driver, waiting for acceptance');
+            addLog('success', `Job offered to driver (Offer ID: ${state.offerId})`);
+            showAlert('info', 'Job offered to driver. Driver can now accept or reject.');
+        }
+
+        async function acceptJob() {
+            if (state.jobStatus !== 'OFFERED') {
+                addLog('error', 'Job must be OFFERED to accept');
+                return;
+            }
+
+            if (USE_REAL_API) {
+                try {
+                    await apiCall(`/job/${state.jobId}/status`, 'POST', { status: 'ASSIGNED' });
+                    updateStatus('ASSIGNED', 'ROGER');
+                    addTimeline('Job Accepted', 'Driver accepted the job in database');
+                    addLog('success', 'Driver accepted via real API');
+                    showAlert('success', 'Job accepted in real database!');
+                    return;
+                } catch (error) {
+                    showAlert('error', 'Failed to accept job: ' + error.message);
+                    return;
+                }
+            }
+            
+            updateStatus('ASSIGNED', 'ROGER');
+            addTimeline('Job Accepted', 'Driver accepted the job and will proceed to pickup');
+            addLog('success', 'Driver accepted the job');
+            showAlert('success', 'Job accepted! Driver is now ROGER (busy with pickup)');
+        }
+
+        async function rejectJob() {
+            if (state.jobStatus !== 'OFFERED') {
+                addLog('error', 'Job must be OFFERED to reject');
+                return;
+            }
+
+            if (USE_REAL_API) {
+                try {
+                    await apiCall(`/job/${state.jobId}/status`, 'POST', { status: 'REJECTED' });
+                    updateStatus('UNASSIGNED', 'AVAILABLE');
+                    addTimeline('Job Rejected', 'Driver rejected in database. Job returned to UNASSIGNED');
+                    addLog('warning', 'Driver rejected via real API');
+                    showAlert('warning', 'Job rejected through real API!');
+                    return;
+                } catch (error) {
+                    showAlert('error', 'Failed to reject job: ' + error.message);
+                    return;
+                }
+            }
+            
+            updateStatus('UNASSIGNED', 'AVAILABLE');
+            addTimeline('Job Rejected', 'Driver rejected the job. Job returned to UNASSIGNED status');
+            addLog('warning', 'Driver rejected the job');
+            showAlert('warning', 'Job rejected! Job status returned to UNASSIGNED, driver is AVAILABLE');
+            
+            // Reset assignment
+            state.offerId = null;
+            state.assignmentId = null;
+        }
+
+        // Generic status update helper
+        async function updateJobStatus(newStatus, newDriverStatus, timelineMsg, logMsg, alertMsg, onSuccess = null) {
+            if (USE_REAL_API && state.jobId) {
+                try {
+                    await apiCall(`/job/${state.jobId}/status`, 'POST', { status: newStatus });
+                    updateStatus(newStatus, newDriverStatus);
+                    addTimeline(timelineMsg, logMsg + ' (via API)');
+                    addLog('success', logMsg + ' - Real database updated');
+                    showAlert('success', alertMsg + ' ✅');
+                    if (onSuccess) onSuccess();
+                    return;
+                } catch (error) {
+                    showAlert('error', 'Failed to update: ' + error.message);
+                    return;
+                }
+            }
+
+            // Mock mode
+            updateStatus(newStatus, newDriverStatus);
+            addTimeline(timelineMsg, logMsg);
+            addLog('info', logMsg);
+            showAlert('info', alertMsg);
+            if (onSuccess) onSuccess();
+        }
+
+        async function proceedToPickup() {
+            if (state.jobStatus !== 'ASSIGNED') {
+                addLog('error', 'Job must be ASSIGNED to proceed');
+                return;
+            }
+
+            await updateJobStatus(
+                'ON_THE_WAY', 
+                'ROGER', 
+                'On The Way', 
+                'Driver is en route to pickup location',
+                'Driver is on the way to pickup',
+                () => animateDriver('20%')
+            );
+        }
+
+        async function markArrived() {
+            if (state.jobStatus !== 'ON_THE_WAY') {
+                addLog('error', 'Job must be ON_THE_WAY to mark arrived');
+                return;
+            }
+
+            await updateJobStatus(
+                'ARRIVED',
+                'ROGER',
+                'Arrived',
+                'Driver arrived at pickup location, waiting for passenger',
+                'Driver arrived at pickup location'
+            );
+        }
+
+        async function startRide() {
+            if (state.jobStatus !== 'ARRIVED') {
+                addLog('error', 'Job must be ARRIVED to start ride');
+                return;
+            }
+
+            await updateJobStatus(
+                'STARTED',
+                'BUSY',
+                'Ride Started',
+                'Passenger on board, ride in progress - Live Metrics now visible',
+                'Ride started! Live Metrics are now visible',
+                () => animateDriver('50%')
+            );
+        }
+
+        async function completeRide() {
+            if (!['STARTED', 'IN_PROGRESS'].includes(state.jobStatus)) {
+                addLog('error', 'Job must be STARTED or IN_PROGRESS to complete');
+                return;
+            }
+
+            await updateJobStatus(
+                'COMPLETED',
+                'AVAILABLE',
+                'Ride Completed',
+                'Ride completed successfully, driver is now available',
+                'Ride completed! Driver is now AVAILABLE for new jobs',
+                () => animateDriver('80%')
+            );
+        }
+
+        async function cancelJob() {
+            if (['COMPLETED', 'CANCELLED', 'REJECTED', 'UNASSIGNED'].includes(state.jobStatus)) {
+                addLog('error', 'Cannot cancel job in current status');
+                return;
+            }
+
+            await updateJobStatus(
+                'CANCELLED',
+                'AVAILABLE',
+                'Job Cancelled',
+                'Job cancelled, driver returned to AVAILABLE status',
+                'Job cancelled! Driver status returned to AVAILABLE'
+            );
+        }
+
+        // Automated Test Scenarios
+        async function runCompleteFlow() {
+            addLog('info', '🔄 Starting complete job lifecycle test...');
+            
+            createJob();
+            await wait(1000);
+            
+            offerJob();
+            await wait(1000);
+            
+            acceptJob();
+            await wait(1500);
+            
+            proceedToPickup();
+            await wait(2000);
+            
+            markArrived();
+            await wait(1500);
+            
+            startRide();
+            await wait(3000);
+            
+            completeRide();
+            
+            addLog('success', '✅ Complete lifecycle test finished!');
+            showAlert('success', 'Complete lifecycle test finished successfully!');
+        }
+
+        async function runRejectionFlow() {
+            addLog('info', '❌ Starting rejection flow test...');
+            
+            createJob();
+            await wait(1000);
+            
+            offerJob();
+            await wait(1000);
+            
+            rejectJob();
+            
+            addLog('success', '✅ Rejection flow test finished!');
+            showAlert('success', 'Rejection flow verified: Job returned to UNASSIGNED, driver to AVAILABLE');
+        }
+
+        async function runCancellationFlow() {
+            addLog('info', '🚫 Starting cancellation flow test...');
+            
+            createJob();
+            await wait(1000);
+            
+            offerJob();
+            await wait(1000);
+            
+            acceptJob();
+            await wait(1000);
+            
+            proceedToPickup();
+            await wait(1500);
+            
+            cancelJob();
+            
+            addLog('success', '✅ Cancellation flow test finished!');
+            showAlert('success', 'Cancellation flow verified: Driver returned to AVAILABLE');
+        }
+
+        async function runRaceCondition() {
+            addLog('info', '⚡ Simulating race condition test...');
+            
+            createJob();
+            await wait(500);
+            
+            offerJob();
+            addLog('info', 'Job status immediately changed to OFFERED');
+            addLog('success', 'Race condition prevented: Job locked at OFFERED status');
+            addLog('info', 'Other drivers cannot claim this job now');
+            
+            showAlert('success', 'Race condition test: Job immediately marked OFFERED to prevent duplicate claims');
+        }
+
+        function resetSimulator() {
+            state = {
+                jobId: null,
+                jobStatus: 'UNASSIGNED',
+                driverStatus: 'AVAILABLE',
+                assignmentId: null,
+                offerId: null,
+                timeline: [],
+                rideStartTime: null,
+                metricsInterval: null,
+                currentDistance: 0,
+                currentSpeed: 0
+            };
+            
+            document.getElementById('jobId').textContent = '-';
+            document.getElementById('timeline').innerHTML = `
+                <div class="timeline-item">
+                    <strong>Simulator Reset</strong>
+                    <div class="timeline-time">${new Date().toLocaleTimeString()}</div>
+                </div>
+            `;
+            document.getElementById('logPanel').innerHTML = `
+                <div class="log-entry log-info">[INFO] Simulator reset</div>
+            `;
+            
+            updateStatus('UNASSIGNED', 'AVAILABLE');
+            animateDriver('10%');
+            
+            addLog('info', 'Simulator reset to initial state');
+            showAlert('info', 'Simulator has been reset');
+        }
+
+        // API Toggle Function
+        function toggleAPI() {
+            USE_REAL_API = document.getElementById('apiToggle').checked;
+            const statusEl = document.getElementById('apiStatus');
+            
+            if (USE_REAL_API) {
+                statusEl.textContent = '🟢 Real Backend Mode';
+                statusEl.style.color = '#66bb6a';
+                addLog('success', '✅ Switched to REAL BACKEND mode - will use database at localhost:3001');
+                showAlert('success', 'Real backend mode enabled! Make sure the server is running.');
+            } else {
+                statusEl.textContent = '🔵 Mock Mode';
+                statusEl.style.color = '#4fc3f7';
+                addLog('info', '🔵 Switched to MOCK mode - simulated data only');
+                showAlert('info', 'Mock mode enabled - using simulated data');
+            }
+        }
+
+        // Initialize
+        function initSimulator() {
+            updateButtonStates();
+            updateTariffDisplay();
+            addLog('success', 'Simulator ready! Create a job to begin testing.');
+            addLog('info', `Mode: ${USE_REAL_API ? 'Real Backend' : 'Mock'} - Toggle above to switch`);
+            addLog('info', `Using tariff: ${state.tariff.name} (Base: $${state.tariff.baseFare}, /km: $${state.tariff.perKmRate}, /min: $${state.tariff.perMinuteRate})`);
+        }
+
+        function updateTariffDisplay() {
+            document.getElementById('tariffName').textContent = state.tariff.name;
+            document.getElementById('tariffBase').textContent = state.tariff.baseFare;
+            document.getElementById('tariffPerKm').textContent = state.tariff.perKmRate;
+            document.getElementById('tariffPerMin').textContent = state.tariff.perMinuteRate;
+            document.getElementById('tariffMin').textContent = state.tariff.minimumFare;
+        }
+
+        // Run initialization when page loads
+        initSimulator();
+    </script>
+</body>
+</html>

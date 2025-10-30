@@ -1,0 +1,1561 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                       String              @id @default(cuid())
+  createdAt                DateTime            @default(now())
+  updatedAt                DateTime            @updatedAt
+  deletedAt                DateTime?
+  firstName                String
+  lastName                 String
+  email                    String              @unique
+  phone                    String              @unique
+  password                 String
+  avatar                   String?
+  role                     UserRole            @default(PASSENGER)
+  isActive                 Boolean             @default(true)
+  isVerified               Boolean             @default(false)
+  lastLoginAt              DateTime?
+  verificationToken        String?
+  resetPasswordToken       String?
+  resetPasswordExpires     DateTime?
+  address                  Json?
+  preferences              Json?
+  rating                   Json?
+  companyId                String?
+  driverAlarms             Alarm[]             @relation("DriverAlarms")
+  assignments              Assignment[]        @relation("DriverAssignments")
+  ownedCompany             Company?            @relation("CompanyOwner")
+  reviewedCompanyDocuments CompanyDocument[]   @relation("CompanyDocumentReviewedBy")
+  uploadedCompanyDocuments CompanyDocument[]   @relation("CompanyDocumentUploadedBy")
+  companyDriverProfile     CompanyDriver[]     @relation("CompanyDriverProfile")
+  customerDeliveries       DeliveryOrder[]     @relation("CustomerDeliveries")
+  documents                Document[]          @relation("DriverDocuments")
+  assignedJobs             Job[]               @relation("JobAssignedDriver")
+  customerJobs             Job[]               @relation("CustomerJobs")
+  locationUpdates          LocationUpdate[]    @relation("DriverLocations")
+  receivedMessages         Message[]           @relation("ReceivedMessages")
+  sentMessages             Message[]           @relation("SentMessages")
+  notifications            Notification[]
+  offers                   Offer[]             @relation("DriverOffers")
+  customerPayments         Payment[]           @relation("CustomerPayments")
+  processedPayouts         Payout[]            @relation("ProcessedPayouts")
+  receivedRatings          Rating[]            @relation("ReceivedRatings")
+  givenRatings             Rating[]            @relation("GivenRatings")
+  rideOffers               RideOffer[]         @relation("DriverRideOffers")
+  driverRides              Ride[]              @relation("DriverRides")
+  passengerRides           Ride[]              @relation("PassengerRides")
+  processedSettlements     Settlement[]        @relation("ProcessedSettlements")
+  shifts                   Shift[]             @relation("DriverShifts")
+  assignedTickets          SupportTicket[]     @relation("AssignedTickets")
+  reportedTickets          SupportTicket[]     @relation("ReportedTickets")
+  company                  Company?            @relation("CompanyUsers", fields: [companyId], references: [id])
+  walletTransactions       WalletTransaction[]
+
+  @@map("users")
+}
+
+model Company {
+  id                               String                 @id @default(cuid())
+  createdAt                        DateTime               @default(now())
+  updatedAt                        DateTime               @updatedAt
+  deletedAt                        DateTime?
+  tenantId                         String?
+  legalName                        String?
+  brandName                        String?
+  companyCode                      String?                @unique
+  companyType                      String                 @default("TAXI_OPERATOR")
+  businessModel                    String                 @default("B2C")
+  registrationNumber               String?
+  taxId                            String?
+  primaryLanguage                  String                 @default("en")
+  timezone                         String                 @default("UTC")
+  status                           String                 @default("PENDING")
+  activationDate                   DateTime?
+  primaryContactName               String?
+  primaryContactRole               String?
+  primaryContactEmail              String?
+  primaryContactPhone              String?
+  supportEmail                     String?
+  supportPhone                     String?
+  billingEmail                     String?
+  hqAddressLine1                   String?
+  hqAddressLine2                   String?
+  hqCity                           String?
+  hqState                          String?
+  hqPostcode                       String?
+  hqCountry                        String?
+  hqLatitude                       Float?
+  hqLongitude                      Float?
+  kycStatus                        String                 @default("PENDING")
+  kycLastReviewedAt                DateTime?
+  kycExpiryAt                      DateTime?
+  docCertificateOfIncorporationUrl String?
+  docTaxCertificateUrl             String?
+  docInsurancePolicyUrl            String?
+  docOperatingLicenseUrl           String?
+  insurancePolicyNumber            String?
+  insuranceExpiryDate              DateTime?
+  permitNumber                     String?
+  permitExpiryDate                 DateTime?
+  serviceModes                     Json?
+  operatingHoursJson               Json?
+  holidayCalendarJson              Json?
+  dispatchMode                     String                 @default("AUTO")
+  autoAssignRadiusKm               Float                  @default(5.0)
+  maxParallelOffers                Int                    @default(3)
+  escalationSlaSeconds             Int                    @default(300)
+  driverBreakPolicyJson            Json?
+  vehicleAgeLimitYears             Int?                   @default(15)
+  requiresVehicleInspection        Boolean                @default(true)
+  billingCycle                     String                 @default("MONTHLY")
+  billingStartDate                 DateTime?
+  billingCurrency                  String                 @default("USD")
+  commissionModel                  String                 @default("PERCENTAGE")
+  commissionRate                   Float                  @default(15.0)
+  driverPayoutFrequency            String                 @default("WEEKLY")
+  settlementThresholdAmount        Float                  @default(100.0)
+  paymentGatewayAccountId          String?
+  stripeConnectedAccountId         String?
+  invoiceDeliveryMethod            String                 @default("EMAIL")
+  latePaymentPolicyJson            Json?
+  walletEnabled                    Boolean                @default(false)
+  walletTopupMinimum               Float                  @default(50.0)
+  subscriptionPlanId               Int?
+  subscriptionStartDate            DateTime?
+  subscriptionEndDate              DateTime?
+  trialEndDate                     DateTime?
+  lastPaymentDate                  DateTime?
+  nextBillingDate                  DateTime?
+  suspendedAt                      DateTime?
+  suspendedBy                      String?
+  reactivatedAt                    DateTime?
+  reactivatedBy                    String?
+  subscriptionUpdatedAt            DateTime?
+  subscriptionUpdatedBy            String?
+  fleetSizeTotal                   Int                    @default(0)
+  fleetCompanyOwnedCount           Int                    @default(0)
+  fleetDriverOwnedCount            Int                    @default(0)
+  fleetActiveVehicleCount          Int                    @default(0)
+  fleetInserviceVehicleCount       Int                    @default(0)
+  fleetOutofserviceVehicleCount    Int                    @default(0)
+  fleetAvgVehicleAgeYears          Float                  @default(0)
+  fleetHasEvCount                  Int                    @default(0)
+  voipProvider                     String?
+  voipAccountId                    String?
+  voipMaskingEnabled               Boolean                @default(false)
+  cctvProvider                     String?
+  cctvAccountId                    String?
+  telematicsProvider               String?
+  telematicsApiKey                 String?
+  smsSenderId                      String?
+  emailSenderDomain                String?
+  webhookEndpointUrl               String?
+  webhookSecret                    String?
+  apiClientId                      String?
+  apiClientSecretHash              String?
+  kpiTargetsJson                   Json?
+  alertRecipientEmails             String[]
+  alertRecipientSms                String[]
+  panicEscalationContactsJson      Json?
+  reportingTimezone                String                 @default("UTC")
+  dataRetentionDays                Int                    @default(2555)
+  gdprContactEmail                 String?
+  name                             String?
+  email                            String?
+  phone                            String?
+  address                          Json?
+  logo                             String?
+  website                          String?
+  description                      String?
+  ownerId                          String                 @unique
+  isActive                         Boolean                @default(false)
+  isVerified                       Boolean                @default(false)
+  autoAssignTimeoutSeconds         Int                    @default(30)
+  autoDispatchEnabled              Boolean                @default(true)
+  dispatchStrategy                 String                 @default("ZONE_QUEUE")
+  maxDispatchRadiusKm              Float                  @default(5.0)
+  Alarm                            Alarm[]
+  billingRecords                   BillingRecord[]        @relation("CompanyBilling")
+  owner                            User                   @relation("CompanyOwner", fields: [ownerId], references: [id])
+  subscriptionPlan                 SubscriptionPlan?      @relation("CompanySubscription", fields: [subscriptionPlanId], references: [id])
+  configurations                   CompanyConfiguration[] @relation("CompanyConfigurations")
+  companyDocuments                 CompanyDocument[]
+  companyDrivers                   CompanyDriver[]
+  payments                         CompanyPayment[]       @relation("CompanyPayments")
+  settings                         CompanySettings?       @relation("CompanySettings")
+  companyTariffs                   CompanyTariff[]
+  companyVehicles                  CompanyVehicle[]
+  companyZones                     CompanyZone[]
+  DeliveryOrder                    DeliveryOrder[]
+  invoices                         Invoice[]              @relation("CompanyInvoices")
+  Job                              Job[]
+  Merchant                         Merchant[]
+  Payment                          Payment[]
+  payouts                          Payout[]               @relation("CompanyPayouts")
+  pricingTemplates                 PricingTemplate[]
+  rides                            Ride[]
+  settlements                      Settlement[]           @relation("CompanySettlements")
+  Shift                            Shift[]
+  SupportTicket                    SupportTicket[]
+  Tariff                           Tariff[]
+  users                            User[]                 @relation("CompanyUsers")
+  vehicles                         Vehicle[]
+  Zone                             Zone[]
+
+  @@map("companies")
+}
+
+model Ride {
+  id                  String           @id @default(cuid())
+  rideId              String           @unique
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+  passengerId         String
+  driverId            String?
+  vehicleId           String?
+  companyId           String
+  rideType            RideType         @default(TAXI)
+  pickup              Json
+  destination         Json
+  stops               Json?
+  status              RideStatus       @default(REQUESTED)
+  requestedAt         DateTime         @default(now())
+  acceptedAt          DateTime?
+  pickedUpAt          DateTime?
+  completedAt         DateTime?
+  cancelledAt         DateTime?
+  estimatedDistance   Float?
+  actualDistance      Float?
+  estimatedDuration   Int?
+  actualDuration      Int?
+  estimatedFare       Float?
+  actualFare          Float?
+  fareBreakdown       Json?
+  paymentMethod       PaymentMethod    @default(CASH)
+  paymentStatus       PaymentStatus    @default(PENDING)
+  paymentId           String?
+  requirements        Json?
+  passengerRating     Json?
+  driverRating        Json?
+  route               Json?
+  cancellationReason  String?
+  cancelledBy         String?
+  promoCode           String?
+  discountAmount      Float?
+  foodDeliveryDetails Json?
+  courierDetails      Json?
+  tariffId            String?
+  offeredAt           DateTime?
+  Job                 Job[]
+  LocationUpdate      LocationUpdate[]
+  Payment             Payment[]
+  Rating              Rating[]
+  RideOffer           RideOffer[]
+  company             Company          @relation(fields: [companyId], references: [id])
+  driver              User?            @relation("DriverRides", fields: [driverId], references: [id])
+  passenger           User             @relation("PassengerRides", fields: [passengerId], references: [id])
+  Tariff              Tariff?          @relation(fields: [tariffId], references: [id])
+  vehicle             Vehicle?         @relation(fields: [vehicleId], references: [id])
+  SupportTicket       SupportTicket[]
+
+  @@map("rides")
+}
+
+model RideOffer {
+  id              String          @id @default(cuid())
+  rideId          String
+  driverId        String
+  offeredAt       DateTime        @default(now())
+  status          RideOfferStatus @default(OFFERED)
+  respondedAt     DateTime?
+  rejectionReason String?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  driver          User            @relation("DriverRideOffers", fields: [driverId], references: [id])
+  ride            Ride            @relation(fields: [rideId], references: [id])
+
+  @@unique([rideId, driverId])
+  @@index([rideId, status])
+  @@index([driverId, status])
+  @@map("ride_offers")
+}
+
+model Vehicle {
+  id              String        @id @default(cuid())
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  make            String
+  model           String
+  year            Int
+  color           String
+  licensePlate    String        @unique
+  vin             String?       @unique
+  vehicleType     VehicleType   @default(SEDAN)
+  companyId       String
+  driverId        String?
+  capacity        Int           @default(4)
+  features        Json?
+  isActive        Boolean       @default(true)
+  isAvailable     Boolean       @default(true)
+  insurance       Json?
+  registration    Json?
+  currentLocation Json?
+  rides           Ride[]
+  vehicleZones    VehicleZone[]
+  company         Company       @relation(fields: [companyId], references: [id])
+
+  @@map("vehicles")
+}
+
+model Job {
+  id                String           @id @default(cuid())
+  jobId             String           @unique
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+  companyId         String
+  type              JobType          @default(TAXI)
+  status            JobStatus        @default(PENDING)
+  tripId            String?
+  deliveryOrderId   String?
+  priority          Int              @default(0)
+  scheduledAt       DateTime?
+  estimatedDuration Int?
+  customerId        String?
+  vehicleType       VehicleType?
+  pickupAddress     String?
+  pickupLatitude    Float?
+  pickupLongitude   Float?
+  dropoffAddress    String?
+  dropoffLatitude   Float?
+  dropoffLongitude  Float?
+  estimatedPrice    Float?
+  estimatedDistance Float?
+  estimatedArrival  DateTime?
+  paymentMethod     PaymentMethod?
+  assignedDriverId  String?
+  requirements      Json?
+  instructions      String?
+  alarms            Alarm[]
+  assignments       Assignment[]
+  assignedDriver    User?            @relation("JobAssignedDriver", fields: [assignedDriverId], references: [id])
+  company           Company          @relation(fields: [companyId], references: [id])
+  customer          User?            @relation("CustomerJobs", fields: [customerId], references: [id])
+  deliveryOrder     DeliveryOrder?   @relation(fields: [deliveryOrderId], references: [id])
+  trip              Ride?            @relation(fields: [tripId], references: [id])
+  locationUpdates   LocationUpdate[]
+  messages          Message[]
+  offers            Offer[]
+
+  @@map("jobs")
+}
+
+model DeliveryOrder {
+  id               String         @id @default(cuid())
+  orderId          String         @unique
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  companyId        String
+  customerId       String
+  type             DeliveryType   @default(FOOD)
+  merchantId       String?
+  pickupLocation   Json
+  dropoffLocation  Json
+  items            Json
+  totalAmount      Decimal        @db.Decimal(10, 2)
+  deliveryFee      Decimal        @db.Decimal(10, 2)
+  status           DeliveryStatus @default(CREATED)
+  confirmedAt      DateTime?
+  readyForPickupAt DateTime?
+  pickedUpAt       DateTime?
+  deliveredAt      DateTime?
+  proofOfDelivery  Json?
+  company          Company        @relation(fields: [companyId], references: [id])
+  customer         User           @relation("CustomerDeliveries", fields: [customerId], references: [id])
+  merchant         Merchant?      @relation(fields: [merchantId], references: [id])
+  jobs             Job[]
+  payments         Payment[]
+  ratings          Rating[]
+
+  @@map("delivery_orders")
+}
+
+model Merchant {
+  id             String          @id @default(cuid())
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  name           String
+  email          String          @unique
+  phone          String
+  address        Json
+  logo           String?
+  description    String?
+  companyId      String
+  businessType   String
+  cuisine        String[]
+  priceRange     String?
+  rating         Float?          @default(0)
+  ratingCount    Int?            @default(0)
+  isActive       Boolean         @default(true)
+  isOpen         Boolean         @default(false)
+  operatingHours Json?
+  menu           Json?
+  commissionRate Decimal         @default(15.00) @db.Decimal(5, 2)
+  deliveryOrders DeliveryOrder[]
+  company        Company         @relation(fields: [companyId], references: [id])
+
+  @@map("merchants")
+}
+
+model Zone {
+  id              String        @id @default(cuid())
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  companyId       String
+  name            String
+  description     String?
+  boundaries      Json
+  type            ZoneType      @default(SERVICE_AREA)
+  surgeMultiplier Decimal?      @db.Decimal(3, 2)
+  isActive        Boolean       @default(true)
+  specialRules    Json?
+  queue           Json?         @default("[]")
+  vehicleZones    VehicleZone[]
+  zoneTariffs     ZoneTariff[]
+  company         Company       @relation(fields: [companyId], references: [id])
+
+  @@map("zones")
+}
+
+model Tariff {
+  id                  String       @id @default(cuid())
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+  companyId           String
+  name                String
+  description         String?
+  baseFare            Decimal      @db.Decimal(10, 2)
+  perKmRate           Decimal      @db.Decimal(10, 2)
+  perMinuteRate       Decimal      @db.Decimal(10, 2)
+  minimumFare         Decimal      @db.Decimal(10, 2)
+  waitingFee          Decimal?     @db.Decimal(10, 2)
+  airportFee          Decimal?     @db.Decimal(10, 2)
+  tollFee             Decimal?     @db.Decimal(10, 2)
+  extraStopFee        Decimal?     @db.Decimal(10, 2)
+  peakHourMultiplier  Decimal?     @db.Decimal(3, 2)
+  nightTimeMultiplier Decimal?     @db.Decimal(3, 2)
+  maxSurgeMultiplier  Decimal?     @default(3.0) @db.Decimal(3, 2)
+  isActive            Boolean      @default(true)
+  validFrom           DateTime?
+  validTo             DateTime?
+  rides               Ride[]
+  company             Company      @relation(fields: [companyId], references: [id])
+  zoneTariffs         ZoneTariff[]
+
+  @@map("tariffs")
+}
+
+model LocationUpdate {
+  id           String    @id @default(cuid())
+  createdAt    DateTime  @default(now())
+  driverId     String
+  jobId        String?
+  tripId       String?
+  latitude     Float
+  longitude    Float
+  accuracy     Float?
+  altitude     Float?
+  speed        Float?
+  heading      Float?
+  batteryLevel Int?
+  networkType  String?
+  timestamp    DateTime?
+  driver       User      @relation("DriverLocations", fields: [driverId], references: [id])
+  job          Job?      @relation(fields: [jobId], references: [id])
+  trip         Ride?     @relation(fields: [tripId], references: [id])
+
+  @@map("location_updates")
+}
+
+model Offer {
+  id                String         @id @default(cuid())
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  jobId             String
+  driverId          String
+  estimatedFare     Decimal        @db.Decimal(10, 2)
+  estimatedDuration Int
+  distanceToPickup  Float
+  status            OfferStatus    @default(SENT)
+  expiresAt         DateTime
+  respondedAt       DateTime?
+  response          OfferResponse?
+  declineReason     String?
+  driver            User           @relation("DriverOffers", fields: [driverId], references: [id])
+  job               Job            @relation(fields: [jobId], references: [id])
+
+  @@map("offers")
+}
+
+model Assignment {
+  id              String           @id @default(cuid())
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  jobId           String
+  driverId        String
+  assignedBy      String
+  assignedAt      DateTime         @default(now())
+  status          AssignmentStatus @default(ASSIGNED)
+  acceptedAt      DateTime?
+  rejectedAt      DateTime?
+  rejectionReason String?
+  driver          User             @relation("DriverAssignments", fields: [driverId], references: [id])
+  job             Job              @relation(fields: [jobId], references: [id])
+
+  @@map("assignments")
+}
+
+model Payment {
+  id                    String              @id @default(cuid())
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+  companyId             String
+  tripId                String?
+  deliveryOrderId       String?
+  customerId            String
+  amount                Decimal             @db.Decimal(10, 2)
+  currency              String              @default("USD")
+  paymentMethod         PaymentMethod       @default(CASH)
+  paymentProvider       String?
+  providerTransactionId String?
+  status                PaymentStatus       @default(PENDING)
+  baseAmount            Decimal?            @db.Decimal(10, 2)
+  tips                  Decimal?            @db.Decimal(10, 2)
+  taxes                 Decimal?            @db.Decimal(10, 2)
+  fees                  Decimal?            @db.Decimal(10, 2)
+  discounts             Decimal?            @db.Decimal(10, 2)
+  processedAt           DateTime?
+  failureReason         String?
+  stripePaymentIntentId String?             @unique
+  stripeCustomerId      String?
+  completedAt           DateTime?
+  refundedAt            DateTime?
+  refundAmount          Decimal?            @db.Decimal(10, 2)
+  refundReason          String?
+  settledAt             DateTime?
+  settlementNotes       String?
+  metadata              Json?
+  company               Company             @relation(fields: [companyId], references: [id])
+  customer              User                @relation("CustomerPayments", fields: [customerId], references: [id])
+  deliveryOrder         DeliveryOrder?      @relation(fields: [deliveryOrderId], references: [id])
+  trip                  Ride?               @relation(fields: [tripId], references: [id])
+  WalletTransaction     WalletTransaction[]
+
+  @@map("payments")
+}
+
+model WalletTransaction {
+  id            String                @id @default(cuid())
+  createdAt     DateTime              @default(now())
+  userId        String
+  type          WalletTransactionType
+  amount        Decimal               @db.Decimal(10, 2)
+  currency      String                @default("USD")
+  description   String?
+  balanceBefore Decimal               @db.Decimal(10, 2)
+  balanceAfter  Decimal               @db.Decimal(10, 2)
+  paymentId     String?
+  payment       Payment?              @relation(fields: [paymentId], references: [id])
+  user          User                  @relation(fields: [userId], references: [id])
+
+  @@map("wallet_transactions")
+}
+
+model Rating {
+  id              String         @id @default(cuid())
+  createdAt       DateTime       @default(now())
+  tripId          String?
+  deliveryOrderId String?
+  raterId         String
+  rateeId         String
+  rating          Int            @db.SmallInt
+  comment         String?
+  tags            String[]
+  isModerated     Boolean        @default(false)
+  isVisible       Boolean        @default(true)
+  deliveryOrder   DeliveryOrder? @relation(fields: [deliveryOrderId], references: [id])
+  ratee           User           @relation("ReceivedRatings", fields: [rateeId], references: [id])
+  rater           User           @relation("GivenRatings", fields: [raterId], references: [id])
+  trip            Ride?          @relation(fields: [tripId], references: [id])
+
+  @@map("ratings")
+}
+
+model Message {
+  id          String      @id @default(cuid())
+  createdAt   DateTime    @default(now())
+  senderId    String
+  receiverId  String?
+  content     String
+  messageType MessageType @default(TEXT)
+  attachments Json?
+  jobId       String?
+  isRead      Boolean     @default(false)
+  readAt      DateTime?
+  isEdited    Boolean     @default(false)
+  job         Job?        @relation(fields: [jobId], references: [id])
+  receiver    User?       @relation("ReceivedMessages", fields: [receiverId], references: [id])
+  sender      User        @relation("SentMessages", fields: [senderId], references: [id])
+
+  @@map("messages")
+}
+
+model Notification {
+  id             String                     @id @default(cuid())
+  createdAt      DateTime                   @default(now())
+  userId         String
+  title          String
+  body           String
+  type           NotificationType
+  channel        NotificationChannel        @default(PUSH)
+  data           Json?
+  isRead         Boolean                    @default(false)
+  readAt         DateTime?
+  sentAt         DateTime?
+  deliveryStatus NotificationDeliveryStatus @default(PENDING)
+  user           User                       @relation(fields: [userId], references: [id])
+
+  @@map("notifications")
+}
+
+model Alarm {
+  id             String        @id @default(cuid())
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  companyId      String
+  type           AlarmType
+  severity       AlarmSeverity @default(MEDIUM)
+  title          String
+  description    String
+  driverId       String?
+  jobId          String?
+  location       Json?
+  status         AlarmStatus   @default(ACTIVE)
+  acknowledgedAt DateTime?
+  acknowledgedBy String?
+  resolvedAt     DateTime?
+  resolvedBy     String?
+  responseNotes  String?
+  company        Company       @relation(fields: [companyId], references: [id])
+  driver         User?         @relation("DriverAlarms", fields: [driverId], references: [id])
+  job            Job?          @relation(fields: [jobId], references: [id])
+
+  @@map("alarms")
+}
+
+model SupportTicket {
+  id           String         @id @default(cuid())
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  companyId    String
+  ticketNumber String         @unique
+  subject      String
+  description  String
+  category     String
+  priority     TicketPriority @default(MEDIUM)
+  reporterId   String
+  assigneeId   String?
+  status       TicketStatus   @default(OPEN)
+  resolvedAt   DateTime?
+  tripId       String?
+  assignee     User?          @relation("AssignedTickets", fields: [assigneeId], references: [id])
+  company      Company        @relation(fields: [companyId], references: [id])
+  reporter     User           @relation("ReportedTickets", fields: [reporterId], references: [id])
+  trip         Ride?          @relation(fields: [tripId], references: [id])
+
+  @@map("support_tickets")
+}
+
+model Document {
+  id              String         @id @default(cuid())
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  driverId        String
+  type            DocumentType
+  documentNumber  String?
+  fileUrl         String
+  fileName        String
+  fileSize        Int?
+  issueDate       DateTime?
+  expiryDate      DateTime?
+  status          DocumentStatus @default(PENDING)
+  verifiedAt      DateTime?
+  verifiedBy      String?
+  rejectedAt      DateTime?
+  rejectionReason String?
+  driver          User           @relation("DriverDocuments", fields: [driverId], references: [id])
+
+  @@map("documents")
+}
+
+model Shift {
+  id            String      @id @default(cuid())
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  driverId      String
+  companyId     String
+  startTime     DateTime
+  endTime       DateTime?
+  status        ShiftStatus @default(OFFLINE)
+  startLocation Json?
+  endLocation   Json?
+  totalEarnings Decimal?    @db.Decimal(10, 2)
+  totalTrips    Int         @default(0)
+  totalDistance Float?      @default(0)
+  company       Company     @relation(fields: [companyId], references: [id])
+  driver        User        @relation("DriverShifts", fields: [driverId], references: [id])
+
+  @@map("shifts")
+}
+
+model Restaurant {
+  id             String   @id @default(cuid())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  name           String
+  email          String   @unique
+  phone          String
+  address        Json
+  logo           String?
+  description    String?
+  cuisine        String[]
+  priceRange     String?
+  rating         Float?   @default(0)
+  ratingCount    Int?     @default(0)
+  operatingHours Json?
+  menu           Json?
+  isActive       Boolean  @default(true)
+  isOpen         Boolean  @default(false)
+  settings       Json?
+
+  @@map("restaurants")
+}
+
+model CompanyVehicle {
+  id                   String    @id @default(cuid())
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  companyId            String
+  vehicleIdExternal    String?
+  make                 String
+  model                String
+  year                 Int
+  bodyType             String
+  vehicleClass         String
+  ownershipType        String
+  capacityPassengers   Int       @default(4)
+  capacityBags         Int       @default(2)
+  wheelchairAccessible Boolean   @default(false)
+  dispatchCallsign     String?
+  registrationNumber   String
+  registrationExpiry   DateTime?
+  insuranceExpiry      DateTime?
+  inspectionExpiry     DateTime?
+  gpsProvider          String?
+  status               String    @default("ACTIVE")
+  notes                String?
+  company              Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@map("company_vehicles")
+}
+
+model CompanyDocument {
+  id              String              @id @default(cuid())
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+  companyId       String
+  type            CompanyDocumentType
+  description     String?
+  fileName        String
+  fileUrl         String
+  storagePath     String
+  fileSize        Int?
+  status          DocumentStatus      @default(PENDING)
+  uploadedById    String?
+  reviewedById    String?
+  reviewedAt      DateTime?
+  rejectionReason String?
+  expiresAt       DateTime?
+  metadata        Json?
+  company         Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  reviewedBy      User?               @relation("CompanyDocumentReviewedBy", fields: [reviewedById], references: [id])
+  uploadedBy      User?               @relation("CompanyDocumentUploadedBy", fields: [uploadedById], references: [id])
+
+  @@map("company_documents")
+}
+
+model CompanyDriver {
+  id                    String    @id @default(cuid())
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  companyId             String
+  userId                String
+  employmentType        String
+  hireDate              DateTime
+  contractExpiry        DateTime?
+  shiftPattern          String?
+  licenseNumber         String
+  licenseExpiry         DateTime
+  backgroundCheckStatus String    @default("PENDING")
+  backgroundCheckExpiry DateTime?
+  trainingCompletedAt   DateTime?
+  panicContactName      String?
+  panicContactPhone     String?
+  status                String    @default("ACTIVE")
+  company               Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user                  User      @relation("CompanyDriverProfile", fields: [userId], references: [id])
+
+  @@unique([companyId, userId])
+  @@map("company_drivers")
+}
+
+model CompanyTariff {
+  id                  String       @id @default(cuid())
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+  companyId           String
+  name                String?
+  description         String?
+  serviceMode         String
+  vehicleType         String
+  zoneId              String?
+  baseFare            Float
+  perKmRate           Float
+  perMinuteRate       Float
+  minimumFare         Float
+  waitingFeePerMinute Float        @default(0)
+  cancellationFee     Float        @default(0)
+  bookingFee          Float        @default(0)
+  airportFee          Float        @default(0)
+  peakHourMultiplier  Float?
+  peakHourStart       String?
+  peakHourEnd         String?
+  peakHour2Start      String?
+  peakHour2End        String?
+  weekendMultiplier   Float?
+  nightMultiplier     Float?
+  nightStart          String?
+  nightEnd            String?
+  validFrom           DateTime     @default(now())
+  validTo             DateTime?
+  priority            Int          @default(0)
+  isActive            Boolean      @default(true)
+  currency            String       @default("USD")
+  taxRate             Float        @default(0)
+  promoStackRulesJson Json?
+  company             Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  zone                CompanyZone? @relation(fields: [zoneId], references: [id])
+
+  @@index([companyId])
+  @@index([zoneId])
+  @@index([serviceMode])
+  @@index([vehicleType])
+  @@map("company_tariffs")
+}
+
+model CompanyZone {
+  id              String          @id @default(cuid())
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  companyId       String
+  zoneName        String
+  zoneType        String
+  geometryType    String          @default("POLYGON")
+  polygonGeojson  Json?
+  coordinates     Json?
+  centerPoint     Json?
+  radius          Float?
+  bounds          Json?
+  color           String          @default("#3B82F6")
+  fillOpacity     Float           @default(0.3)
+  strokeWeight    Int             @default(2)
+  icon            String?
+  priceMultiplier Float           @default(1.0)
+  pickupAllowed   Boolean         @default(true)
+  dropoffAllowed  Boolean         @default(true)
+  priority        Int             @default(0)
+  notes           String?
+  description     String?
+  area            Float?
+  perimeter       Float?
+  totalRides      Int             @default(0)
+  activeRides     Int             @default(0)
+  isActive        Boolean         @default(true)
+  status          String          @default("ACTIVE")
+  companyTariffs  CompanyTariff[]
+  company         Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([zoneType])
+  @@map("company_zones")
+}
+
+model PricingTemplate {
+  id           String   @id @default(cuid())
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  companyId    String?
+  name         String
+  description  String?
+  category     String
+  icon         String?
+  templateData Json
+  isPublic     Boolean  @default(false)
+  usageCount   Int      @default(0)
+  company      Company? @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([category])
+  @@map("pricing_templates")
+}
+
+model SubscriptionPlan {
+  id             Int             @id @default(autoincrement())
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  name           String          @unique
+  description    String
+  price          Float
+  billingCycle   String          @default("monthly")
+  vehicleLimit   Int             @default(-1)
+  driverLimit    Int             @default(-1)
+  rideCommission Float           @default(0.0)
+  features       Json            @default("[]")
+  isActive       Boolean         @default(true)
+  trialDays      Int             @default(0)
+  setupFee       Float           @default(0.0)
+  billingRecords BillingRecord[] @relation("PlanBilling")
+  companies      Company[]       @relation("CompanySubscription")
+
+  @@map("subscription_plans")
+}
+
+model BillingRecord {
+  id                 Int              @id @default(autoincrement())
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+  companyId          String
+  subscriptionPlanId Int
+  billingPeriodStart DateTime
+  billingPeriodEnd   DateTime
+  basePlanCost       Float            @default(0.0)
+  vehicleCost        Float            @default(0.0)
+  commissionAmount   Float            @default(0.0)
+  setupFee           Float            @default(0.0)
+  totalAmount        Float
+  vehicleCount       Int              @default(0)
+  driverCount        Int              @default(0)
+  ridesCount         Int              @default(0)
+  totalRevenue       Float            @default(0.0)
+  status             String           @default("pending")
+  dueDate            DateTime?
+  paidAt             DateTime?
+  company            Company          @relation("CompanyBilling", fields: [companyId], references: [id])
+  subscriptionPlan   SubscriptionPlan @relation("PlanBilling", fields: [subscriptionPlanId], references: [id])
+  payments           CompanyPayment[] @relation("BillingPayments")
+  invoice            Invoice?         @relation("BillingInvoice")
+
+  @@map("billing_records")
+}
+
+model Invoice {
+  id                 String           @id @default(cuid())
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+  invoiceNumber      String           @unique
+  companyId          String
+  billingRecordId    Int              @unique
+  issueDate          DateTime         @default(now())
+  dueDate            DateTime
+  subtotal           Float
+  taxAmount          Float            @default(0.0)
+  totalAmount        Float
+  status             String           @default("issued")
+  sentAt             DateTime?
+  paidAt             DateTime?
+  lineItems          Json
+  notes              String?
+  termsAndConditions String?
+  filePath           String?
+  payments           CompanyPayment[] @relation("InvoicePayments")
+  billingRecord      BillingRecord    @relation("BillingInvoice", fields: [billingRecordId], references: [id])
+  company            Company          @relation("CompanyInvoices", fields: [companyId], references: [id])
+
+  @@map("invoices")
+}
+
+model CompanyPayment {
+  id              String         @id @default(cuid())
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  companyId       String
+  billingRecordId Int?
+  invoiceId       String?
+  amount          Float
+  paymentMethod   String
+  paymentDate     DateTime       @default(now())
+  transactionId   String?
+  gatewayProvider String?
+  gatewayResponse Json?
+  status          String         @default("completed")
+  failureReason   String?
+  processedBy     String?
+  notes           String?
+  receiptUrl      String?
+  billingRecord   BillingRecord? @relation("BillingPayments", fields: [billingRecordId], references: [id])
+  company         Company        @relation("CompanyPayments", fields: [companyId], references: [id])
+  invoice         Invoice?       @relation("InvoicePayments", fields: [invoiceId], references: [id])
+
+  @@map("company_payments")
+}
+
+model Settlement {
+  id              String    @id @default(cuid())
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  companyId       String
+  amount          Decimal   @db.Decimal(10, 2)
+  paymentIds      String[]
+  status          String    @default("PROCESSING")
+  processedBy     String
+  processedAt     DateTime?
+  notes           String?
+  metadata        Json?
+  company         Company   @relation("CompanySettlements", fields: [companyId], references: [id])
+  processedByUser User      @relation("ProcessedSettlements", fields: [processedBy], references: [id])
+
+  @@map("settlements")
+}
+
+model Payout {
+  id                       String    @id @default(cuid())
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+  companyId                String
+  amount                   Decimal   @db.Decimal(10, 2)
+  currency                 String    @default("USD")
+  status                   String    @default("PROCESSING")
+  stripePayoutId           String?   @unique
+  stripeConnectedAccountId String?
+  description              String?
+  processedBy              String
+  processedAt              DateTime?
+  completedAt              DateTime?
+  failureReason            String?
+  metadata                 Json?
+  company                  Company   @relation("CompanyPayouts", fields: [companyId], references: [id])
+  processedByUser          User      @relation("ProcessedPayouts", fields: [processedBy], references: [id])
+
+  @@map("payouts")
+}
+
+model GlobalConfiguration {
+  id               String                 @id @default(cuid())
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+  key              String                 @unique
+  category         String
+  displayName      String
+  description      String?
+  dataType         String
+  value            Json
+  isActive         Boolean                @default(true)
+  createdBy        String?
+  lastUpdatedBy    String?
+  version          Int                    @default(1)
+  companyOverrides CompanyConfiguration[]
+
+  @@map("global_configurations")
+}
+
+model CompanyConfiguration {
+  id                String               @id @default(cuid())
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  companyId         String
+  globalConfigId    String?
+  key               String
+  category          String
+  displayName       String
+  description       String?
+  dataType          String
+  value             Json
+  inheritFromGlobal Boolean              @default(true)
+  isActive          Boolean              @default(true)
+  createdBy         String?
+  lastUpdatedBy     String?
+  version           Int                  @default(1)
+  company           Company              @relation("CompanyConfigurations", fields: [companyId], references: [id], onDelete: Cascade)
+  globalConfig      GlobalConfiguration? @relation(fields: [globalConfigId], references: [id])
+
+  @@unique([companyId, key])
+  @@map("company_configurations")
+}
+
+model Country {
+  id            String        @id @default(cuid())
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  name          String        @unique
+  code          String        @unique
+  code3         String?       @unique
+  numericCode   String?
+  phoneCode     String?
+  currency      String?
+  flag          String?
+  isActive      Boolean       @default(true)
+  serviceCities ServiceCity[]
+
+  @@map("countries")
+}
+
+model Currency {
+  id            String   @id @default(cuid())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  name          String   @unique
+  code          String   @unique
+  symbol        String
+  decimalPlaces Int      @default(2)
+  isActive      Boolean  @default(true)
+
+  @@map("currencies")
+}
+
+model VehicleTypeMaster {
+  id          String   @id @default(cuid())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  name        String   @unique
+  code        String   @unique
+  description String?
+  capacity    Int      @default(4)
+  icon        String?
+  isActive    Boolean  @default(true)
+
+  @@map("vehicle_types")
+}
+
+model ServiceCity {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  name      String
+  code      String   @unique
+  countryId String
+  state     String?
+  timezone  String   @default("UTC")
+  latitude  Float?
+  longitude Float?
+  isActive  Boolean  @default(true)
+  country   Country  @relation(fields: [countryId], references: [id], onDelete: Cascade)
+
+  @@unique([name, countryId])
+  @@map("service_cities")
+}
+
+model FareType {
+  id          String   @id @default(cuid())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  name        String   @unique
+  code        String   @unique
+  description String?
+  isActive    Boolean  @default(true)
+
+  @@map("fare_types")
+}
+
+model DocumentTypeMaster {
+  id             String   @id @default(cuid())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  name           String   @unique
+  code           String   @unique
+  description    String?
+  category       String   @default("GENERAL")
+  isRequired     Boolean  @default(false)
+  expiryRequired Boolean  @default(false)
+  isActive       Boolean  @default(true)
+
+  @@map("document_types")
+}
+
+model ZoneTariff {
+  id         String    @id @default(cuid())
+  createdAt  DateTime  @default(now())
+  zoneId     String
+  tariffId   String
+  priority   Int       @default(0)
+  isDefault  Boolean   @default(false)
+  activeFrom DateTime?
+  activeTo   DateTime?
+  daysOfWeek String?
+  timeFrom   String?
+  timeTo     String?
+  tariff     Tariff    @relation(fields: [tariffId], references: [id], onDelete: Cascade)
+  zone       Zone      @relation(fields: [zoneId], references: [id], onDelete: Cascade)
+
+  @@unique([zoneId, tariffId])
+  @@index([zoneId])
+  @@index([tariffId])
+  @@map("zone_tariffs")
+}
+
+model VehicleZone {
+  id         String    @id @default(cuid())
+  createdAt  DateTime  @default(now())
+  vehicleId  String
+  zoneId     String
+  isApproved Boolean   @default(true)
+  canOperate Boolean   @default(true)
+  validFrom  DateTime?
+  validTo    DateTime?
+  vehicle    Vehicle   @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  zone       Zone      @relation(fields: [zoneId], references: [id], onDelete: Cascade)
+
+  @@unique([vehicleId, zoneId])
+  @@index([vehicleId])
+  @@index([zoneId])
+  @@map("vehicle_zones")
+}
+
+model CompanySettings {
+  id                      String   @id @default(cuid())
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+  companyId               String   @unique
+  mapProvider             String   @default("OPENSTREETMAP")
+  googleMapsApiKey        String?
+  placeApiProvider        String   @default("OPENSTREETMAP")
+  defaultLanguage         String   @default("en")
+  defaultCurrency         String   @default("USD")
+  timezone                String   @default("UTC")
+  stripePublicKey         String?
+  stripeSecretKey         String?
+  locationUpdateInterval  Int      @default(2) // in seconds: 1, 2, 3, 5, etc.
+  heartbeatInterval       Int      @default(30) // in seconds: 10, 30, 60, etc.
+  company                 Company  @relation("CompanySettings", fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@map("company_settings")
+}
+
+enum JobType {
+  TAXI
+  DELIVERY
+  COURIER
+}
+
+enum JobStatus {
+  PENDING
+  UNASSIGNED
+  OFFERED
+  ACCEPTED
+  ASSIGNED
+  ON_THE_WAY
+  ARRIVED
+  STARTED
+  ACTIVE
+  REACHED
+  IN_PROGRESS
+  COMPLETED
+  FINISHED
+  CANCELLED
+  REJECTED
+  NOSHOW
+  RECALLED
+  EXPIRED
+}
+
+enum DeliveryType {
+  FOOD
+  GROCERY
+  PHARMACY
+  PACKAGE
+  DOCUMENT
+}
+
+enum DeliveryStatus {
+  CREATED
+  ASSIGNED
+  PICKED_UP
+  IN_TRANSIT
+  DELIVERED
+  CANCELLED
+  RETURNED
+}
+
+enum ZoneType {
+  SERVICE_AREA
+  RESTRICTED
+  HIGH_DEMAND
+  AIRPORT
+  DOWNTOWN
+  CITY_CENTER
+  BUSINESS_DISTRICT
+  RESIDENTIAL
+  SUBURB
+  COMMERCIAL
+  INDUSTRIAL
+  CUSTOM
+}
+
+enum OfferResponse {
+  PENDING
+  ACCEPTED
+  REJECTED
+  TIMEOUT
+}
+
+enum NotificationChannel {
+  PUSH
+  SMS
+  EMAIL
+  IN_APP
+}
+
+enum NotificationDeliveryStatus {
+  PENDING
+  SENT
+  DELIVERED
+  FAILED
+  READ
+}
+
+enum AlarmSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum AlarmStatus {
+  ACTIVE
+  ACKNOWLEDGED
+  RESOLVED
+  DISMISSED
+}
+
+enum OfferStatus {
+  SENT
+  ACCEPTED
+  REJECTED
+  EXPIRED
+}
+
+enum AssignmentStatus {
+  OFFERED
+  ASSIGNED
+  ACCEPTED
+  REJECTED
+  COMPLETED
+  CANCELLED
+}
+
+enum WalletTransactionType {
+  CREDIT
+  DEBIT
+  REFUND
+  BONUS
+  PENALTY
+  COMMISSION
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  LOCATION
+  SYSTEM
+}
+
+enum NotificationType {
+  JOB_ASSIGNED
+  JOB_ACCEPTED
+  JOB_STARTED
+  JOB_COMPLETED
+  PAYMENT_RECEIVED
+  SYSTEM_ALERT
+  PROMOTION
+}
+
+enum AlarmType {
+  PANIC
+  EMERGENCY
+  MAINTENANCE
+  SYSTEM
+}
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+enum TicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum DocumentType {
+  DRIVER_LICENSE
+  VEHICLE_REGISTRATION
+  INSURANCE
+  PERMIT
+  ID_CARD
+  PHOTO
+}
+
+enum DocumentStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EXPIRED
+}
+
+enum ShiftStatus {
+  OFFLINE
+  ONLINE
+  BUSY
+  BREAK
+}
+
+enum UserRole {
+  PASSENGER
+  DRIVER
+  DISPATCHER
+  OWNER
+  SUPER_ADMIN
+}
+
+enum RideType {
+  TAXI
+  FOOD_DELIVERY
+  COURIER
+}
+
+enum RideStatus {
+  REQUESTED
+  PENDING
+  ACCEPTED
+  DRIVER_ASSIGNED
+  DRIVER_ARRIVED
+  PICKED_UP
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  FAILED
+}
+
+enum RideOfferStatus {
+  OFFERED
+  ACCEPTED
+  REJECTED
+  TIMEOUT
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+enum VehicleType {
+  SEDAN
+  SUV
+  HATCHBACK
+  MOTORCYCLE
+  BICYCLE
+  VAN
+  TRUCK
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  WALLET
+  DIGITAL_WALLET
+  BANK_TRANSFER
+}
+
+enum CompanyDocumentType {
+  CERTIFICATE_OF_INCORPORATION
+  TAX_CERTIFICATE
+  INSURANCE_POLICY
+  OPERATING_LICENSE
+  DATA_PROTECTION
+  OTHER
+}
+
+enum CompanyStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  TERMINATED
+}
+
+enum KycStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EXPIRED
+}
+
+enum DispatchMode {
+  AUTO
+  MANUAL
+  HYBRID
+}
+
+enum BillingCycle {
+  MONTHLY
+  QUARTERLY
+  YEARLY
+}
+
+enum CommissionModel {
+  FLAT
+  PERCENTAGE
+  TIERED
+}
+
+enum PayoutFrequency {
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
+enum SubscriptionStatus {
+  TRIAL
+  ACTIVE
+  SUSPENDED
+  CANCELLED
+  EXPIRED
+}
+
+enum BillingStatus {
+  PENDING
+  PAID
+  OVERDUE
+  CANCELLED
+}
