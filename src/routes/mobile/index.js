@@ -10,6 +10,7 @@ const driverProfileRoutes = require('./driverProfile');
 const driverVehiclesRoutes = require('./driverVehicles');
 const driverStatusRoutes = require('./driverStatus');
 const driverZoneRoutes = require('./driverZones');
+const driverPreferencesRoutes = require('./driverPreferences');
 
 const router = express.Router();
 
@@ -31,6 +32,7 @@ router.use('/driver/profile', driverProfileRoutes);
 router.use('/driver/vehicles', driverVehiclesRoutes);
 router.use('/driver/status', driverStatusRoutes);
 router.use('/driver/zones', driverZoneRoutes);
+router.use('/driver/preferences', driverPreferencesRoutes);
 
 // Health check for mobile API
 router.get('/health', (req, res) => {

@@ -8,19 +8,19 @@ datasource db {
 }
 
 model User {
-  id                       String              @id @default(cuid())
-  createdAt                DateTime            @default(now())
-  updatedAt                DateTime            @updatedAt
+  id                       String                  @id @default(cuid())
+  createdAt                DateTime                @default(now())
+  updatedAt                DateTime                @updatedAt
   deletedAt                DateTime?
   firstName                String
   lastName                 String
-  email                    String              @unique
-  phone                    String              @unique
+  email                    String                  @unique
+  phone                    String                  @unique
   password                 String
   avatar                   String?
-  role                     UserRole            @default(PASSENGER)
-  isActive                 Boolean             @default(true)
-  isVerified               Boolean             @default(false)
+  role                     UserRole                @default(PASSENGER)
+  isActive                 Boolean                 @default(true)
+  isVerified               Boolean                 @default(false)
   lastLoginAt              DateTime?
   verificationToken        String?
   resetPasswordToken       String?
@@ -29,54 +29,58 @@ model User {
   preferences              Json?
   rating                   Json?
   companyId                String?
-  driverAlarms             Alarm[]             @relation("DriverAlarms")
-  assignments              Assignment[]        @relation("DriverAssignments")
-  ownedCompany             Company?            @relation("CompanyOwner")
-  reviewedCompanyDocuments CompanyDocument[]   @relation("CompanyDocumentReviewedBy")
-  uploadedCompanyDocuments CompanyDocument[]   @relation("CompanyDocumentUploadedBy")
-  companyDriverProfile     CompanyDriver[]     @relation("CompanyDriverProfile")
-  customerDeliveries       DeliveryOrder[]     @relation("CustomerDeliveries")
-  documents                Document[]          @relation("DriverDocuments")
-  assignedJobs             Job[]               @relation("JobAssignedDriver")
-  customerJobs             Job[]               @relation("CustomerJobs")
-  locationUpdates          LocationUpdate[]    @relation("DriverLocations")
-  receivedMessages         Message[]           @relation("ReceivedMessages")
-  sentMessages             Message[]           @relation("SentMessages")
+  driverAlarms             Alarm[]                 @relation("DriverAlarms")
+  assignments              Assignment[]            @relation("DriverAssignments")
+  ownedCompany             Company?                @relation("CompanyOwner")
+  reviewedCompanyDocuments CompanyDocument[]       @relation("CompanyDocumentReviewedBy")
+  uploadedCompanyDocuments CompanyDocument[]       @relation("CompanyDocumentUploadedBy")
+  companyDriverProfile     CompanyDriver[]         @relation("CompanyDriverProfile")
+  customerDeliveries       DeliveryOrder[]         @relation("CustomerDeliveries")
+  documents                Document[]              @relation("DriverDocuments")
+  assignedJobs             Job[]                   @relation("JobAssignedDriver")
+  customerJobs             Job[]                   @relation("CustomerJobs")
+  locationUpdates          LocationUpdate[]        @relation("DriverLocations")
+  receivedMessages         Message[]               @relation("ReceivedMessages")
+  sentMessages             Message[]               @relation("SentMessages")
   notifications            Notification[]
-  offers                   Offer[]             @relation("DriverOffers")
-  customerPayments         Payment[]           @relation("CustomerPayments")
-  processedPayouts         Payout[]            @relation("ProcessedPayouts")
-  receivedRatings          Rating[]            @relation("ReceivedRatings")
-  givenRatings             Rating[]            @relation("GivenRatings")
-  rideOffers               RideOffer[]         @relation("DriverRideOffers")
-  driverRides              Ride[]              @relation("DriverRides")
-  passengerRides           Ride[]              @relation("PassengerRides")
-  processedSettlements     Settlement[]        @relation("ProcessedSettlements")
-  shifts                   Shift[]             @relation("DriverShifts")
-  assignedTickets          SupportTicket[]     @relation("AssignedTickets")
-  reportedTickets          SupportTicket[]     @relation("ReportedTickets")
-  company                  Company?            @relation("CompanyUsers", fields: [companyId], references: [id])
+  offers                   Offer[]                 @relation("DriverOffers")
+  customerPayments         Payment[]               @relation("CustomerPayments")
+  driverPayments           Payment[]               @relation("DriverPayments")
+  processedPayouts         Payout[]                @relation("ProcessedPayouts")
+  receivedRatings          Rating[]                @relation("ReceivedRatings")
+  givenRatings             Rating[]                @relation("GivenRatings")
+  rideOffers               RideOffer[]             @relation("DriverRideOffers")
+  driverRides              Ride[]                  @relation("DriverRides")
+  passengerRides           Ride[]                  @relation("PassengerRides")
+  processedSettlements     Settlement[]            @relation("ProcessedSettlements")
+  shifts                   Shift[]                 @relation("DriverShifts")
+  assignedTickets          SupportTicket[]         @relation("AssignedTickets")
+  reportedTickets          SupportTicket[]         @relation("ReportedTickets")
+  company                  Company?                @relation("CompanyUsers", fields: [companyId], references: [id])
   walletTransactions       WalletTransaction[]
+  driverEarnings           DriverEarning[]         @relation("DriverEarnings")
+  driverEarningsSummaries  DriverEarningsSummary[] @relation("DriverEarningsSummaries")
+  DriverPreferences        DriverPreferences?
 
   @@map("users")
 }
 
 model Company {
-  id                               String                 @id @default(cuid())
-  createdAt                        DateTime               @default(now())
-  updatedAt                        DateTime               @updatedAt
+  id                               String                  @id @default(cuid())
+  createdAt                        DateTime                @default(now())
+  updatedAt                        DateTime                @updatedAt
   deletedAt                        DateTime?
   tenantId                         String?
   legalName                        String?
   brandName                        String?
-  companyCode                      String?                @unique
-  companyType                      String                 @default("TAXI_OPERATOR")
-  businessModel                    String                 @default("B2C")
+  companyCode                      String?                 @unique
+  companyType                      String                  @default("TAXI_OPERATOR")
+  businessModel                    String                  @default("B2C")
   registrationNumber               String?
   taxId                            String?
-  primaryLanguage                  String                 @default("en")
-  timezone                         String                 @default("UTC")
-  status                           String                 @default("PENDING")
+  primaryLanguage                  String                  @default("en")
+  timezone                         String                  @default("UTC")
+  status                           String                  @default("PENDING")
   activationDate                   DateTime?
   primaryContactName               String?
   primaryContactRole               String?
@@ -93,7 +97,7 @@ model Company {
   hqCountry                        String?
   hqLatitude                       Float?
   hqLongitude                      Float?
-  kycStatus                        String                 @default("PENDING")
+  kycStatus                        String                  @default("PENDING")
   kycLastReviewedAt                DateTime?
   kycExpiryAt                      DateTime?
   docCertificateOfIncorporationUrl String?
@@ -107,26 +111,26 @@ model Company {
   serviceModes                     Json?
   operatingHoursJson               Json?
   holidayCalendarJson              Json?
-  dispatchMode                     String                 @default("AUTO")
-  autoAssignRadiusKm               Float                  @default(5.0)
-  maxParallelOffers                Int                    @default(3)
-  escalationSlaSeconds             Int                    @default(300)
+  dispatchMode                     String                  @default("AUTO")
+  autoAssignRadiusKm               Float                   @default(5.0)
+  maxParallelOffers                Int                     @default(3)
+  escalationSlaSeconds             Int                     @default(300)
   driverBreakPolicyJson            Json?
-  vehicleAgeLimitYears             Int?                   @default(15)
-  requiresVehicleInspection        Boolean                @default(true)
-  billingCycle                     String                 @default("MONTHLY")
+  vehicleAgeLimitYears             Int?                    @default(15)
+  requiresVehicleInspection        Boolean                 @default(true)
+  billingCycle                     String                  @default("MONTHLY")
   billingStartDate                 DateTime?
-  billingCurrency                  String                 @default("USD")
-  commissionModel                  String                 @default("PERCENTAGE")
-  commissionRate                   Float                  @default(15.0)
-  driverPayoutFrequency            String                 @default("WEEKLY")
-  settlementThresholdAmount        Float                  @default(100.0)
+  billingCurrency                  String                  @default("USD")
+  commissionModel                  String                  @default("PERCENTAGE")
+  commissionRate                   Float                   @default(15.0)
+  driverPayoutFrequency            String                  @default("WEEKLY")
+  settlementThresholdAmount        Float                   @default(100.0)
   paymentGatewayAccountId          String?
   stripeConnectedAccountId         String?
-  invoiceDeliveryMethod            String                 @default("EMAIL")
+  invoiceDeliveryMethod            String                  @default("EMAIL")
   latePaymentPolicyJson            Json?
-  walletEnabled                    Boolean                @default(false)
-  walletTopupMinimum               Float                  @default(50.0)
+  walletEnabled                    Boolean                 @default(false)
+  walletTopupMinimum               Float                   @default(50.0)
   subscriptionPlanId               Int?
   subscriptionStartDate            DateTime?
   subscriptionEndDate              DateTime?
@@ -139,17 +143,17 @@ model Company {
   reactivatedBy                    String?
   subscriptionUpdatedAt            DateTime?
   subscriptionUpdatedBy            String?
-  fleetSizeTotal                   Int                    @default(0)
-  fleetCompanyOwnedCount           Int                    @default(0)
-  fleetDriverOwnedCount            Int                    @default(0)
-  fleetActiveVehicleCount          Int                    @default(0)
-  fleetInserviceVehicleCount       Int                    @default(0)
-  fleetOutofserviceVehicleCount    Int                    @default(0)
-  fleetAvgVehicleAgeYears          Float                  @default(0)
-  fleetHasEvCount                  Int                    @default(0)
+  fleetSizeTotal                   Int                     @default(0)
+  fleetCompanyOwnedCount           Int                     @default(0)
+  fleetDriverOwnedCount            Int                     @default(0)
+  fleetActiveVehicleCount          Int                     @default(0)
+  fleetInserviceVehicleCount       Int                     @default(0)
+  fleetOutofserviceVehicleCount    Int                     @default(0)
+  fleetAvgVehicleAgeYears          Float                   @default(0)
+  fleetHasEvCount                  Int                     @default(0)
   voipProvider                     String?
   voipAccountId                    String?
-  voipMaskingEnabled               Boolean                @default(false)
+  voipMaskingEnabled               Boolean                 @default(false)
   cctvProvider                     String?
   cctvAccountId                    String?
   telematicsProvider               String?
@@ -164,8 +168,8 @@ model Company {
   alertRecipientEmails             String[]
   alertRecipientSms                String[]
   panicEscalationContactsJson      Json?
-  reportingTimezone                String                 @default("UTC")
-  dataRetentionDays                Int                    @default(2555)
+  reportingTimezone                String                  @default("UTC")
+  dataRetentionDays                Int                     @default(2555)
   gdprContactEmail                 String?
   name                             String?
   email                            String?
@@ -174,40 +178,42 @@ model Company {
   logo                             String?
   website                          String?
   description                      String?
-  ownerId                          String                 @unique
-  isActive                         Boolean                @default(false)
-  isVerified                       Boolean                @default(false)
-  autoAssignTimeoutSeconds         Int                    @default(30)
-  autoDispatchEnabled              Boolean                @default(true)
-  dispatchStrategy                 String                 @default("ZONE_QUEUE")
-  maxDispatchRadiusKm              Float                  @default(5.0)
+  ownerId                          String                  @unique
+  isActive                         Boolean                 @default(false)
+  isVerified                       Boolean                 @default(false)
+  autoAssignTimeoutSeconds         Int                     @default(30)
+  autoDispatchEnabled              Boolean                 @default(true)
+  dispatchStrategy                 String                  @default("ZONE_QUEUE")
+  maxDispatchRadiusKm              Float                   @default(5.0)
   Alarm                            Alarm[]
-  billingRecords                   BillingRecord[]        @relation("CompanyBilling")
-  owner                            User                   @relation("CompanyOwner", fields: [ownerId], references: [id])
-  subscriptionPlan                 SubscriptionPlan?      @relation("CompanySubscription", fields: [subscriptionPlanId], references: [id])
-  configurations                   CompanyConfiguration[] @relation("CompanyConfigurations")
+  billingRecords                   BillingRecord[]         @relation("CompanyBilling")
+  owner                            User                    @relation("CompanyOwner", fields: [ownerId], references: [id])
+  subscriptionPlan                 SubscriptionPlan?       @relation("CompanySubscription", fields: [subscriptionPlanId], references: [id])
+  configurations                   CompanyConfiguration[]  @relation("CompanyConfigurations")
   companyDocuments                 CompanyDocument[]
   companyDrivers                   CompanyDriver[]
-  payments                         CompanyPayment[]       @relation("CompanyPayments")
-  settings                         CompanySettings?       @relation("CompanySettings")
+  payments                         CompanyPayment[]        @relation("CompanyPayments")
+  settings                         CompanySettings?        @relation("CompanySettings")
   companyTariffs                   CompanyTariff[]
   companyVehicles                  CompanyVehicle[]
   companyZones                     CompanyZone[]
   DeliveryOrder                    DeliveryOrder[]
-  invoices                         Invoice[]              @relation("CompanyInvoices")
+  invoices                         Invoice[]               @relation("CompanyInvoices")
   Job                              Job[]
   Merchant                         Merchant[]
   Payment                          Payment[]
-  payouts                          Payout[]               @relation("CompanyPayouts")
+  payouts                          Payout[]                @relation("CompanyPayouts")
   pricingTemplates                 PricingTemplate[]
   rides                            Ride[]
-  settlements                      Settlement[]           @relation("CompanySettlements")
+  settlements                      Settlement[]            @relation("CompanySettlements")
   Shift                            Shift[]
   SupportTicket                    SupportTicket[]
   Tariff                           Tariff[]
-  users                            User[]                 @relation("CompanyUsers")
+  users                            User[]                  @relation("CompanyUsers")
   vehicles                         Vehicle[]
   Zone                             Zone[]
+  driverEarnings                   DriverEarning[]         @relation("CompanyDriverEarnings")
+  driverEarningsSummaries          DriverEarningsSummary[] @relation("CompanyEarningsSummaries")
 
   @@map("companies")
 }
@@ -339,6 +345,9 @@ model Job {
   estimatedDistance Float?
   estimatedArrival  DateTime?
   paymentMethod     PaymentMethod?
+  actualFare        Decimal?         @db.Decimal(10, 2)
+  finalAmount       Decimal?         @db.Decimal(10, 2)
+  completedAt       DateTime?
   assignedDriverId  String?
   requirements      Json?
   instructions      String?
@@ -352,7 +361,12 @@ model Job {
   locationUpdates   LocationUpdate[]
   messages          Message[]
   offers            Offer[]
+  earnings          DriverEarning[]
+  payments          Payment[]
 
+  @@index([assignedDriverId, updatedAt])
+  @@index([assignedDriverId, completedAt])
+  @@index([status, completedAt])
   @@map("jobs")
 }
 
@@ -414,49 +428,51 @@ model Merchant {
 }
 
 model Zone {
-  id              String        @id @default(cuid())
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
-  companyId       String
-  name            String
-  description     String?
-  boundaries      Json
-  type            ZoneType      @default(SERVICE_AREA)
-  surgeMultiplier Decimal?      @db.Decimal(3, 2)
-  isActive        Boolean       @default(true)
-  specialRules    Json?
-  queue           Json?         @default("[]")
-  vehicleZones    VehicleZone[]
-  zoneTariffs     ZoneTariff[]
-  company         Company       @relation(fields: [companyId], references: [id])
+  id                String              @id @default(cuid())
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  companyId         String
+  name              String
+  description       String?
+  boundaries        Json
+  type              ZoneType            @default(SERVICE_AREA)
+  surgeMultiplier   Decimal?            @db.Decimal(3, 2)
+  isActive          Boolean             @default(true)
+  specialRules      Json?
+  queue             Json?               @default("[]")
+  vehicleZones      VehicleZone[]
+  zoneTariffs       ZoneTariff[]
+  company           Company             @relation(fields: [companyId], references: [id])
+  DriverPreferences DriverPreferences[]
 
   @@map("zones")
 }
 
 model Tariff {
-  id                  String       @id @default(cuid())
-  createdAt           DateTime     @default(now())
-  updatedAt           DateTime     @updatedAt
+  id                  String              @id @default(cuid())
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
   companyId           String
   name                String
   description         String?
-  baseFare            Decimal      @db.Decimal(10, 2)
-  perKmRate           Decimal      @db.Decimal(10, 2)
-  perMinuteRate       Decimal      @db.Decimal(10, 2)
-  minimumFare         Decimal      @db.Decimal(10, 2)
-  waitingFee          Decimal?     @db.Decimal(10, 2)
-  airportFee          Decimal?     @db.Decimal(10, 2)
-  tollFee             Decimal?     @db.Decimal(10, 2)
-  extraStopFee        Decimal?     @db.Decimal(10, 2)
-  peakHourMultiplier  Decimal?     @db.Decimal(3, 2)
-  nightTimeMultiplier Decimal?     @db.Decimal(3, 2)
-  maxSurgeMultiplier  Decimal?     @default(3.0) @db.Decimal(3, 2)
-  isActive            Boolean      @default(true)
+  baseFare            Decimal             @db.Decimal(10, 2)
+  perKmRate           Decimal             @db.Decimal(10, 2)
+  perMinuteRate       Decimal             @db.Decimal(10, 2)
+  minimumFare         Decimal             @db.Decimal(10, 2)
+  waitingFee          Decimal?            @db.Decimal(10, 2)
+  airportFee          Decimal?            @db.Decimal(10, 2)
+  tollFee             Decimal?            @db.Decimal(10, 2)
+  extraStopFee        Decimal?            @db.Decimal(10, 2)
+  peakHourMultiplier  Decimal?            @db.Decimal(3, 2)
+  nightTimeMultiplier Decimal?            @db.Decimal(3, 2)
+  maxSurgeMultiplier  Decimal?            @default(3.0) @db.Decimal(3, 2)
+  isActive            Boolean             @default(true)
   validFrom           DateTime?
   validTo             DateTime?
   rides               Ride[]
-  company             Company      @relation(fields: [companyId], references: [id])
+  company             Company             @relation(fields: [companyId], references: [id])
   zoneTariffs         ZoneTariff[]
+  DriverPreferences   DriverPreferences[]
 
   @@map("tariffs")
 }
@@ -529,6 +545,8 @@ model Payment {
   tripId                String?
   deliveryOrderId       String?
   customerId            String
+  driverId              String?
+  jobId                 String?
   amount                Decimal             @db.Decimal(10, 2)
   currency              String              @default("USD")
   paymentMethod         PaymentMethod       @default(CASH)
@@ -540,6 +558,8 @@ model Payment {
   taxes                 Decimal?            @db.Decimal(10, 2)
   fees                  Decimal?            @db.Decimal(10, 2)
   discounts             Decimal?            @db.Decimal(10, 2)
+  driverEarnings        Decimal?            @db.Decimal(10, 2)
+  paidAt                DateTime?
   processedAt           DateTime?
   failureReason         String?
   stripePaymentIntentId String?             @unique
@@ -553,10 +573,15 @@ model Payment {
   metadata              Json?
   company               Company             @relation(fields: [companyId], references: [id])
   customer              User                @relation("CustomerPayments", fields: [customerId], references: [id])
+  driver                User?               @relation("DriverPayments", fields: [driverId], references: [id])
+  job                   Job?                @relation(fields: [jobId], references: [id])
   deliveryOrder         DeliveryOrder?      @relation(fields: [deliveryOrderId], references: [id])
   trip                  Ride?               @relation(fields: [tripId], references: [id])
   WalletTransaction     WalletTransaction[]
+  DriverEarnings        DriverEarning[]
 
+  @@index([driverId, paidAt])
+  @@index([jobId])
   @@map("payments")
 }
 
@@ -575,6 +600,126 @@ model WalletTransaction {
   user          User                  @relation(fields: [userId], references: [id])
 
   @@map("wallet_transactions")
+}
+
+model DriverEarning {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  driverId  String
+  companyId String
+  jobId     String?
+  paymentId String?
+  shiftId   String?
+
+  // Earnings details
+  amount        Decimal  @db.Decimal(10, 2)
+  currency      String   @default("NZD")
+  paymentMethod String
+  earnedAt      DateTime @default(now())
+
+  // Trip breakdown
+  baseFare       Decimal? @default(0.00) @db.Decimal(10, 2)
+  distanceFare   Decimal? @default(0.00) @db.Decimal(10, 2)
+  timeFare       Decimal? @default(0.00) @db.Decimal(10, 2)
+  waitingFare    Decimal? @default(0.00) @db.Decimal(10, 2)
+  extraAmount    Decimal? @default(0.00) @db.Decimal(10, 2)
+  discountAmount Decimal? @default(0.00) @db.Decimal(10, 2)
+
+  // Commission & splits
+  totalAmount       Decimal  @db.Decimal(10, 2)
+  companyCommission Decimal? @default(0.00) @db.Decimal(10, 2)
+  driverEarnings    Decimal  @db.Decimal(10, 2)
+  commissionRate    Decimal? @default(0.20) @db.Decimal(5, 4)
+
+  // Special flags
+  totalMobility    Boolean @default(false)
+  adjustmentReason String?
+  isAdjustment     Boolean @default(false)
+
+  // Metadata
+  tripDistance   Decimal? @db.Decimal(10, 2)
+  tripDuration   Int?
+  pickupAddress  String?
+  dropoffAddress String?
+  customerName   String?
+  metadata       Json?
+
+  // Relations
+  driver  User     @relation("DriverEarnings", fields: [driverId], references: [id], onDelete: Cascade)
+  company Company  @relation("CompanyDriverEarnings", fields: [companyId], references: [id], onDelete: Cascade)
+  job     Job?     @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  payment Payment? @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  shift   Shift?   @relation("ShiftEarnings", fields: [shiftId], references: [id], onDelete: SetNull)
+
+  @@index([driverId, earnedAt(sort: Desc)])
+  @@index([companyId, earnedAt(sort: Desc)])
+  @@index([paymentMethod])
+  @@index([earnedAt(sort: Desc)])
+  @@index([jobId])
+  @@map("driver_earnings")
+}
+
+model DriverEarningsSummary {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  driverId  String
+  companyId String
+
+  // Time period
+  periodType  String // 'DAILY', 'WEEKLY', 'MONTHLY'
+  periodStart DateTime
+  periodEnd   DateTime
+  periodLabel String // e.g., '2025-10-31', '2025-W44', '2025-10'
+
+  // Aggregated earnings
+  totalEarnings Decimal  @default(0.00) @db.Decimal(10, 2)
+  totalTrips    Int      @default(0)
+  totalDistance Decimal? @default(0.00) @db.Decimal(10, 2)
+  totalDuration Int?     @default(0)
+
+  // Payment method breakdown
+  cashEarnings     Decimal? @default(0.00) @db.Decimal(10, 2)
+  cashTrips        Int?     @default(0)
+  cardEarnings     Decimal? @default(0.00) @db.Decimal(10, 2)
+  cardTrips        Int?     @default(0)
+  eftposEarnings   Decimal? @default(0.00) @db.Decimal(10, 2)
+  eftposTrips      Int?     @default(0)
+  accountEarnings  Decimal? @default(0.00) @db.Decimal(10, 2)
+  accountTrips     Int?     @default(0)
+  giftCardEarnings Decimal? @default(0.00) @db.Decimal(10, 2)
+  giftCardTrips    Int?     @default(0)
+
+  // Special categories
+  totalMobilityEarnings Decimal? @default(0.00) @db.Decimal(10, 2)
+  totalMobilityTrips    Int?     @default(0)
+  adjustmentEarnings    Decimal? @default(0.00) @db.Decimal(10, 2)
+  adjustmentTrips       Int?     @default(0)
+
+  // Commission totals
+  totalCompanyCommission Decimal? @default(0.00) @db.Decimal(10, 2)
+  averageCommissionRate  Decimal? @default(0.20) @db.Decimal(5, 4)
+
+  // Fare breakdown
+  totalBaseFare       Decimal? @default(0.00) @db.Decimal(10, 2)
+  totalDistanceFare   Decimal? @default(0.00) @db.Decimal(10, 2)
+  totalTimeFare       Decimal? @default(0.00) @db.Decimal(10, 2)
+  totalWaitingFare    Decimal? @default(0.00) @db.Decimal(10, 2)
+  totalExtraAmount    Decimal? @default(0.00) @db.Decimal(10, 2)
+  totalDiscountAmount Decimal? @default(0.00) @db.Decimal(10, 2)
+
+  // Metadata
+  metadata Json?
+
+  // Relations
+  driver  User    @relation("DriverEarningsSummaries", fields: [driverId], references: [id], onDelete: Cascade)
+  company Company @relation("CompanyEarningsSummaries", fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([driverId, periodType, periodLabel])
+  @@index([driverId, periodType, periodStart(sort: Desc)])
+  @@index([companyId, periodType, periodStart(sort: Desc)])
+  @@map("driver_earnings_summaries")
 }
 
 model Rating {
@@ -705,21 +850,22 @@ model Document {
 }
 
 model Shift {
-  id            String      @id @default(cuid())
-  createdAt     DateTime    @default(now())
-  updatedAt     DateTime    @updatedAt
+  id            String          @id @default(cuid())
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
   driverId      String
   companyId     String
   startTime     DateTime
   endTime       DateTime?
-  status        ShiftStatus @default(OFFLINE)
+  status        ShiftStatus     @default(OFFLINE)
   startLocation Json?
   endLocation   Json?
-  totalEarnings Decimal?    @db.Decimal(10, 2)
-  totalTrips    Int         @default(0)
-  totalDistance Float?      @default(0)
-  company       Company     @relation(fields: [companyId], references: [id])
-  driver        User        @relation("DriverShifts", fields: [driverId], references: [id])
+  totalEarnings Decimal?        @db.Decimal(10, 2)
+  totalTrips    Int             @default(0)
+  totalDistance Float?          @default(0)
+  company       Company         @relation(fields: [companyId], references: [id])
+  driver        User            @relation("DriverShifts", fields: [driverId], references: [id])
+  earnings      DriverEarning[] @relation("ShiftEarnings")
 
   @@map("shifts")
 }
@@ -823,6 +969,20 @@ model CompanyDriver {
 
   @@unique([companyId, userId])
   @@map("company_drivers")
+}
+
+model DriverPreferences {
+  id               String   @id @default(cuid())
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  driverId         String   @unique
+  selectedZoneId   String?
+  selectedTariffId String?
+  driver           User     @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  selectedZone     Zone?    @relation(fields: [selectedZoneId], references: [id], onDelete: SetNull)
+  selectedTariff   Tariff?  @relation(fields: [selectedTariffId], references: [id], onDelete: SetNull)
+
+  @@map("driver_preferences")
 }
 
 model CompanyTariff {
@@ -1237,21 +1397,21 @@ model VehicleZone {
 }
 
 model CompanySettings {
-  id                      String   @id @default(cuid())
-  createdAt               DateTime @default(now())
-  updatedAt               DateTime @updatedAt
-  companyId               String   @unique
-  mapProvider             String   @default("OPENSTREETMAP")
-  googleMapsApiKey        String?
-  placeApiProvider        String   @default("OPENSTREETMAP")
-  defaultLanguage         String   @default("en")
-  defaultCurrency         String   @default("USD")
-  timezone                String   @default("UTC")
-  stripePublicKey         String?
-  stripeSecretKey         String?
-  locationUpdateInterval  Int      @default(2) // in seconds: 1, 2, 3, 5, etc.
-  heartbeatInterval       Int      @default(30) // in seconds: 10, 30, 60, etc.
-  company                 Company  @relation("CompanySettings", fields: [companyId], references: [id], onDelete: Cascade)
+  id                     String   @id @default(cuid())
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+  companyId              String   @unique
+  mapProvider            String   @default("OPENSTREETMAP")
+  googleMapsApiKey       String?
+  placeApiProvider       String   @default("OPENSTREETMAP")
+  defaultLanguage        String   @default("en")
+  defaultCurrency        String   @default("USD")
+  timezone               String   @default("UTC")
+  stripePublicKey        String?
+  stripeSecretKey        String?
+  locationUpdateInterval Int      @default(2) // in seconds: 1, 2, 3, 5, etc.
+  heartbeatInterval      Int      @default(30) // in seconds: 10, 30, 60, etc.
+  company                Company  @relation("CompanySettings", fields: [companyId], references: [id], onDelete: Cascade)
 
   @@map("company_settings")
 }

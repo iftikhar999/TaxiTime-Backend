@@ -217,7 +217,7 @@ router.post('/', async (req, res) => {
         } = req.body;
 
         // Validation
-        if (!name || !baseFare || !perKmRate || !perMinuteRate || !minimumFare) {
+        if (!name || baseFare === undefined || perKmRate === undefined || perMinuteRate === undefined || minimumFare === undefined) {
             return res.status(400).json({
                 success: false,
                 message: 'Missing required fields: name, baseFare, perKmRate, perMinuteRate, minimumFare'

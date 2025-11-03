@@ -159,16 +159,18 @@ async function checkDriverActivity(io) {
         console.log(`  - Current shift status: ${currentShiftStatus}`);
 
         // Set shift to OFFLINE (instead of updating driver status directly)
+        // ✅ FIX: Don't end the shift - just mark as OFFLINE so driver can resume later
         if (activeShift) {
           await prisma.shift.update({
             where: { id: activeShift.id },
             data: {
               status: 'OFFLINE',
-              endTime: now,
+              // ❌ DON'T SET endTime - keep shift active for resume
+              // endTime: now,
               updatedAt: now
             }
           });
-          console.log(`  ✓ Set shift ${activeShift.id} to OFFLINE and ended it`);
+          console.log(`  ✓ Set shift ${activeShift.id} to OFFLINE (shift remains active for resume)`);
         }
 
         // Unassign jobs

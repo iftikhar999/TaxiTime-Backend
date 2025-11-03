@@ -118,6 +118,43 @@ router.post('/login', async (req, res) => {
         // Log successful login
         console.log(`Driver login successful: ${driver.email} (${driver.id})`);
 
+        // Automatically refresh zones for the driver's company
+        let activeZones = [];
+        try {
+            const zones = await prisma.zone.findMany({
+                where: {
+                    companyId: driver.companyId,
+                    isActive: true
+                },
+                select: {
+                    id: true,
+                    name: true,
+                    type: true,
+                    boundaries: true,
+                    surgeMultiplier: true,
+                    isActive: true
+                },
+                orderBy: [
+                    { type: 'asc' },
+                    { name: 'asc' }
+                ]
+            });
+
+            activeZones = zones.map(zone => ({
+                id: zone.id,
+                name: zone.name,
+                type: zone.type,
+                boundaries: zone.boundaries,
+                surgeMultiplier: zone.surgeMultiplier ? Number.parseFloat(zone.surgeMultiplier.toString()) : 1,
+                isActive: zone.isActive
+            }));
+
+            console.log(`🔄 Loaded ${activeZones.length} active zones for driver ${driver.id} on login`);
+        } catch (zoneError) {
+            console.warn('Failed to load zones on login:', zoneError.message);
+            // Don't fail login if zones can't be loaded
+        }
+
         res.json({
             success: true,
             message: 'Login successful',
@@ -137,7 +174,9 @@ router.post('/login', async (req, res) => {
                     currentJob: null,
                     jobStatus: null,
                     isAvailable: true
-                }
+                },
+                activeZones: activeZones, // Include zones in login response
+                zonesRefreshedAt: new Date().toISOString()
             }
         });
 

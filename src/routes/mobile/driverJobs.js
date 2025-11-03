@@ -268,7 +268,155 @@ const RIDE_STATUS_ALLOWLIST = new Set([
     'CANCELLED',
 ]);
 
+/**
+ * GET /api/mobile/driver/jobs/history
+ * Get driver's completed jobs (from Job table)
+ */
 router.get('/history', authenticateToken, async (req, res) => {
+    const driverId = req.user?.id;
+
+    if (!driverId) {
+        return res.status(401).json({
+            success: false,
+            message: 'Driver authentication required',
+        });
+    }
+
+    const {
+        limit = 20,
+        page = 1,
+        status = 'COMPLETED',
+    } = req.query;
+
+    const parsedLimit = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 50);
+    const parsedPage = Math.max(parseInt(page, 10) || 1, 1);
+    const skip = (parsedPage - 1) * parsedLimit;
+
+    try {
+        console.log(`📋 [Job History] Request from driver ${driverId}, page ${parsedPage}, limit ${parsedLimit}`);
+
+        // Query completed jobs
+        const jobs = await prisma.job.findMany({
+            where: {
+                assignedDriverId: driverId,
+                status: status,
+                completedAt: {
+                    not: null,
+                },
+            },
+            orderBy: [
+                { completedAt: 'desc' },
+                { updatedAt: 'desc' },
+            ],
+            skip,
+            take: parsedLimit,
+            include: {
+                customer: {
+                    select: {
+                        id: true,
+                        firstName: true,
+                        lastName: true,
+                        email: true,
+                        phone: true,
+                    },
+                },
+                trip: {
+                    select: {
+                        id: true,
+                        status: true,
+                        actualFare: true,
+                        actualDistance: true,
+                        actualDuration: true,
+                        Payment: {
+                            where: {
+                                status: {
+                                    in: ['COMPLETED', 'PAID'],
+                                },
+                            },
+                            select: {
+                                amount: true,
+                                driverEarnings: true,
+                                paymentMethod: true,
+                            },
+                            take: 1,
+                        },
+                    },
+                },
+            },
+        });
+
+        // Get total count for pagination
+        const totalCount = await prisma.job.count({
+            where: {
+                assignedDriverId: driverId,
+                status: status,
+                completedAt: {
+                    not: null,
+                },
+            },
+        });
+
+        const summaries = jobs.map((job) => {
+            const payment = job.trip?.Payment?.[0];
+            
+            return {
+                id: job.id,
+                jobId: job.jobId,
+                status: job.status,
+                completedAt: job.completedAt?.toISOString() || job.updatedAt.toISOString(),
+                pickup: {
+                    address: job.pickupAddress,
+                    latitude: job.pickupLatitude,
+                    longitude: job.pickupLongitude,
+                },
+                dropoff: {
+                    address: job.dropoffAddress,
+                    latitude: job.dropoffLatitude,
+                    longitude: job.dropoffLongitude,
+                },
+                distance: job.trip?.actualDistance ?? job.estimatedDistance,
+                duration: job.trip?.actualDuration ?? job.estimatedDuration,
+                fare: {
+                    estimated: job.estimatedPrice,
+                    actual: job.finalAmount ?? job.actualFare ?? job.trip?.actualFare,
+                    driverEarnings: payment?.driverEarnings ?? job.finalAmount ?? job.actualFare,
+                },
+                paymentMethod: job.paymentMethod ?? payment?.paymentMethod,
+                customer: job.customer ? {
+                    id: job.customer.id,
+                    name: `${job.customer.firstName || ''} ${job.customer.lastName || ''}`.trim() || job.customer.email,
+                    phone: job.customer.phone,
+                } : null,
+            };
+        });
+
+        res.json({
+            success: true,
+            data: summaries,
+            pagination: {
+                page: parsedPage,
+                limit: parsedLimit,
+                total: totalCount,
+                totalPages: Math.ceil(totalCount / parsedLimit),
+                hasMore: (parsedPage * parsedLimit) < totalCount,
+            },
+        });
+    } catch (error) {
+        console.error('❌ [Job History] Failed to fetch:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Unable to load job history',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+        });
+    }
+});
+
+/**
+ * GET /api/mobile/driver/jobs/rides/history
+ * Get driver's ride history (from Ride table)
+ * Kept for backward compatibility
+ */
+router.get('/rides/history', authenticateToken, async (req, res) => {
     const driverId = req.user?.id;
 
     if (!driverId) {
@@ -621,7 +769,21 @@ router.post('/:jobId/claim', authenticateToken, async (req, res) => {
  */
 router.post('/payment', authenticateToken, async (req, res) => {
     const driverId = req.user?.id;
-    const { jobId, amount, paymentMethod, customerId, status, collectedAt } = req.body;
+    const { 
+        jobId, 
+        amount, 
+        paymentMethod, 
+        customerId, 
+        status, 
+        collectedAt,
+        baseFare = 0,
+        extraAmount = 0,
+        discountAmount = 0,
+        totalMobility = false,
+        adjustmentReason = '',
+        breakdown = null,
+        pauseRecords = null,
+    } = req.body;
 
     console.log('💰 [PAYMENT COLLECTION] Request received', { 
         jobId, 
@@ -669,6 +831,16 @@ router.post('/payment', authenticateToken, async (req, res) => {
             });
         }
 
+        // Get current shift for driver
+        const currentShift = await prisma.shift.findFirst({
+            where: {
+                driverId,
+                status: { in: ['ONLINE', 'ON_TRIP', 'BREAK'] },
+                endTime: null,
+            },
+            orderBy: { startTime: 'desc' },
+        });
+
         // Calculate commission (e.g., 20% for company)
         const companyCommissionRate = job.company?.commissionRate || 0.20;
         const companyCommission = amount * companyCommissionRate;
@@ -683,7 +855,7 @@ router.post('/payment', authenticateToken, async (req, res) => {
                 driverId,
                 companyId: job.companyId,
                 amount: amount,
-                currency: 'USD',
+                currency: 'NZD',
                 paymentMethod: paymentMethod.toUpperCase(),
                 status: status || 'COMPLETED',
                 paidAt: collectedAt ? new Date(collectedAt) : new Date(),
@@ -711,6 +883,52 @@ router.post('/payment', authenticateToken, async (req, res) => {
                     paymentStatus: 'PAID',
                 },
             });
+        }
+
+        // ✅ NEW: Record earnings with detailed breakdown
+        const earningsService = req.earningsService;
+        
+        if (earningsService) {
+            try {
+                await earningsService.recordEarning({
+                    driverId,
+                    companyId: job.companyId,
+                    jobId,
+                    paymentId: payment.id,
+                    shiftId: currentShift?.id,
+                    amount,
+                    currency: 'NZD',
+                    paymentMethod: paymentMethod.toUpperCase(),
+                    earnedAt: collectedAt ? new Date(collectedAt) : new Date(),
+                    baseFare: Number.parseFloat(baseFare) || 0,
+                    distanceFare: breakdown?.distanceCost || 0,
+                    timeFare: breakdown?.timeCost || 0,
+                    waitingFare: breakdown?.waitingCost || 0,
+                    extraAmount: Number.parseFloat(extraAmount) || 0,
+                    discountAmount: Number.parseFloat(discountAmount) || 0,
+                    totalAmount: amount,
+                    companyCommission,
+                    driverEarnings,
+                    commissionRate: companyCommissionRate,
+                    totalMobility,
+                    adjustmentReason: adjustmentReason || null,
+                    isAdjustment: !!adjustmentReason,
+                    tripDistance: breakdown?.totalDistance || job.estimatedDistance,
+                    tripDuration: breakdown?.totalTime ? Math.floor(breakdown.totalTime / 60) : null,
+                    pickupAddress: job.pickupAddress,
+                    dropoffAddress: job.dropoffAddress,
+                    customerName: null, // Could fetch from customer if needed
+                    metadata: {
+                        breakdown,
+                        pauseRecords,
+                    },
+                });
+            } catch (earningsError) {
+                console.error('⚠️ [PAYMENT COLLECTION] Failed to record earnings (non-critical):', earningsError);
+                // Don't fail the payment if earnings recording fails
+            }
+        } else {
+            console.warn('⚠️ [PAYMENT COLLECTION] EarningsService not available on request');
         }
 
         console.log('✅ [PAYMENT COLLECTION] Payment recorded successfully', {
@@ -771,6 +989,7 @@ router.post('/walk-in/create', authenticateToken, async (req, res) => {
                     },
                     take: 1,
                 },
+                DriverPreferences: true, // ✅ FIX: Include DriverPreferences table (capital D)
             },
         });
 
@@ -787,26 +1006,54 @@ router.post('/walk-in/create', authenticateToken, async (req, res) => {
             return res.status(400).json({ error: 'No active shift found. Please start your shift first.' });
         }
         
-        // ✅ FIX: Get vehicle and tariff from driver preferences (not from relations)
-        const prefs = driver.preferences || {};
-        const selectedVehicleId = prefs.selectedVehicleId || prefs.vehicleId;
-        const selectedTariffId = prefs.selectedTariffId || prefs.tariffId;
-
-        // Get driver's current location from preferences
-        const driverPrefs = driver.preferences || {};
-        const currentLocation = driverPrefs.lastLocation || driverPrefs.currentLocation || {};
+        // ✅ FIX: Get vehicle and tariff from DriverPreferences table (not JSON preferences)
+        const driverPrefs = driver.DriverPreferences;
         
-        const pickupLatitude = currentLocation.latitude || currentLocation.lat;
-        const pickupLongitude = currentLocation.longitude || currentLocation.lng;
+        // ✅ CRITICAL FIX: Vehicle and tariff come from DriverPreferences, but may not exist yet
+        // For walk-in jobs, we can proceed without them (will be null in ride record)
+        const selectedVehicleId = driverPrefs?.selectedVehicleId || null;
+        const selectedTariffId = driverPrefs?.selectedTariffId || null;
+        
+        console.log(`📝 Walk-in job details: vehicleId=${selectedVehicleId}, tariffId=${selectedTariffId}, hasPrefs=${!!driverPrefs}`);
 
-        if (!pickupLatitude || !pickupLongitude) {
-            return res.status(400).json({ error: 'Cannot determine your current location. Please enable GPS.' });
+        // ✅ FIX: Get driver's current location from LocationUpdate table (real-time GPS data)
+        let lastLocation = await prisma.locationUpdate.findFirst({
+            where: { driverId: driverId },
+            orderBy: { timestamp: 'desc' }
+        });
+
+        let pickupAddress = 'Current Location'; // Default address
+        const jsonPrefs = driver.preferences || {}; // ✅ FIX: Define at correct scope
+
+        if (!lastLocation || !lastLocation.latitude || !lastLocation.longitude) {
+            console.log(`⚠️ No location found for driver ${driverId} - checking JSON preferences fallback`);
+            
+            // Fallback to JSON preferences if LocationUpdate not available
+            const currentLocation = jsonPrefs.lastLocation || jsonPrefs.currentLocation || {};
+            const fallbackLatitude = currentLocation.latitude || currentLocation.lat;
+            const fallbackLongitude = currentLocation.longitude || currentLocation.lng;
+            
+            if (!fallbackLatitude || !fallbackLongitude) {
+                return res.status(400).json({ error: 'Cannot determine your current location. Please enable GPS and try again.' });
+            }
+            
+            // Use fallback location
+            lastLocation = {
+                latitude: fallbackLatitude,
+                longitude: fallbackLongitude
+            };
+            
+            // Try to get address from JSON prefs if available
+            pickupAddress = currentLocation.address || 'Current Location';
         }
+        
+        const pickupLatitude = lastLocation.latitude;
+        const pickupLongitude = lastLocation.longitude;
+        
+        console.log(`📍 Using location: lat=${pickupLatitude}, lng=${pickupLongitude}, address=${pickupAddress}`);
 
         const now = new Date();
         const rideId = `WALKIN-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-        
-        console.log(`📝 Walk-in job details: vehicleId=${selectedVehicleId}, tariffId=${selectedTariffId}`);
         
         // ✅ FIX: Create BOTH Ride AND Job (like dispatch does)
         // Use a transaction to ensure both are created together
@@ -822,7 +1069,7 @@ router.post('/walk-in/create', authenticateToken, async (req, res) => {
                     rideType: 'TAXI',
                     status: 'IN_PROGRESS', // ✅ Started immediately
                     pickup: {
-                        address: currentLocation.address || 'Current Location',
+                        address: pickupAddress, // ✅ Use the address variable we defined
                         latitude: pickupLatitude,
                         longitude: pickupLongitude,
                     },
@@ -857,7 +1104,7 @@ router.post('/walk-in/create', authenticateToken, async (req, res) => {
                     scheduledAt: null, // ✅ FIX: NULL = "NOW" job (not "LATER")
                     assignedDriverId: driverId,
                     customerId: driverId, // Temporary - walk-in has no pre-registered customer
-                    pickupAddress: currentLocation.address || 'Current Location',
+                    pickupAddress: pickupAddress, // ✅ Use the address variable we defined
                     pickupLatitude: pickupLatitude,
                     pickupLongitude: pickupLongitude,
                     dropoffAddress: 'Destination - To be set',
@@ -878,7 +1125,7 @@ router.post('/walk-in/create', authenticateToken, async (req, res) => {
                 where: { id: driverId },
                 data: {
                     preferences: {
-                        ...driverPrefs,
+                        ...jsonPrefs,
                         driverStatus: 'BUSY',
                         lastStatusChange: now.toISOString(),
                     },
@@ -944,27 +1191,47 @@ router.get('/stats/today', authenticateToken, async (req, res) => {
     try {
         console.log(`📊 Fetching today's stats for driver: ${driverId}`);
         
-        // Get today's start and end times (local timezone aware)
+        // Get today's start and end times in UTC
         const now = new Date();
-        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
-        const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+        const todayStart = new Date(now);
+        todayStart.setHours(0, 0, 0, 0);
+        const todayEnd = new Date(now);
+        todayEnd.setHours(23, 59, 59, 999);
 
-        // Get all completed jobs for today
-        // ✅ FIX: Job model doesn't have completedAt, use updatedAt instead
-        // ✅ FIX: Job model doesn't have Payment relation, get it from Ride model
+        console.log(`📊 Date range: ${todayStart.toISOString()} to ${todayEnd.toISOString()}`);
+
+        // ✅ FIX: Query COMPLETED jobs using completedAt field
         const todaysJobs = await prisma.job.findMany({
             where: {
                 assignedDriverId: driverId,
-                status: 'COMPLETED', // ✅ FIX: Only COMPLETED status
-                updatedAt: {
+                status: 'COMPLETED',
+                completedAt: {
                     gte: todayStart,
                     lte: todayEnd,
                 },
             },
-            include: {
+            select: {
+                id: true,
+                status: true,
+                finalAmount: true,
+                actualFare: true,
+                estimatedPrice: true,
+                completedAt: true,
                 trip: {
-                    include: {
-                        Payment: true, // ✅ FIX: Capital P! (Payment, not payment)
+                    select: {
+                        actualFare: true,
+                        Payment: {
+                            where: {
+                                status: {
+                                    in: ['COMPLETED', 'PAID'],
+                                },
+                            },
+                            select: {
+                                driverEarnings: true,
+                                amount: true,
+                            },
+                            take: 1,
+                        },
                     },
                 },
             },
@@ -972,32 +1239,46 @@ router.get('/stats/today', authenticateToken, async (req, res) => {
 
         console.log(`📊 Found ${todaysJobs.length} completed jobs for today`);
 
-        // ✅ Calculate earnings from ACTUAL payments (not estimates)
+        // ✅ Calculate earnings from actual collected amounts
         const totalJobs = todaysJobs.length;
-        const totalEarnings = todaysJobs.reduce((sum, job) => {
-            // Priority 1: Payment from trip relation (array of payments)
-            if (job.trip && job.trip.Payment && job.trip.Payment.length > 0) {
-                const payment = job.trip.Payment[0]; // Get first payment
-                const earning = payment.driverEarnings 
-                    ? parseFloat(payment.driverEarnings) 
-                    : payment.amount 
-                    ? parseFloat(payment.amount) 
-                    : 0;
-                return sum + earning;
+        let totalEarnings = 0;
+
+        for (const job of todaysJobs) {
+            // Priority 1: finalAmount (what driver actually collected)
+            if (job.finalAmount) {
+                totalEarnings += parseFloat(job.finalAmount);
+                continue;
             }
             
-            // Priority 2: Trip's actual fare (if no payment record)
-            if (job.trip && job.trip.actualFare) {
-                return sum + parseFloat(job.trip.actualFare);
+            // Priority 2: Driver earnings from payment record
+            if (job.trip?.Payment?.[0]?.driverEarnings) {
+                totalEarnings += parseFloat(job.trip.Payment[0].driverEarnings);
+                continue;
             }
             
-            // Priority 3: Fallback to estimated price
+            // Priority 3: Full payment amount
+            if (job.trip?.Payment?.[0]?.amount) {
+                totalEarnings += parseFloat(job.trip.Payment[0].amount);
+                continue;
+            }
+            
+            // Priority 4: Trip's actual fare
+            if (job.trip?.actualFare) {
+                totalEarnings += parseFloat(job.trip.actualFare);
+                continue;
+            }
+            
+            // Priority 5: Job's actual fare
+            if (job.actualFare) {
+                totalEarnings += parseFloat(job.actualFare);
+                continue;
+            }
+            
+            // Priority 6: Fallback to estimated price
             if (job.estimatedPrice) {
-                return sum + parseFloat(job.estimatedPrice);
+                totalEarnings += parseFloat(job.estimatedPrice);
             }
-            
-            return sum;
-        }, 0);
+        }
 
         console.log(`📊 Total jobs: ${totalJobs}, Total earnings: $${totalEarnings.toFixed(2)}`);
 
@@ -1005,7 +1286,7 @@ router.get('/stats/today', authenticateToken, async (req, res) => {
             success: true,
             stats: {
                 todayJobs: totalJobs,
-                todayEarnings: totalEarnings.toFixed(2),
+                todayEarnings: parseFloat(totalEarnings.toFixed(2)),
                 date: todayStart.toISOString().split('T')[0],
             },
         });
@@ -1019,10 +1300,11 @@ router.get('/stats/today', authenticateToken, async (req, res) => {
             success: true,
             stats: {
                 todayJobs: 0,
-                todayEarnings: '0.00',
+                todayEarnings: 0,
                 date: new Date().toISOString().split('T')[0],
             },
             warning: 'Failed to fetch actual stats, showing defaults',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined,
         });
     }
 });

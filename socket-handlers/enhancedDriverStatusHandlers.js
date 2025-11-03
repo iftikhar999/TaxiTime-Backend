@@ -400,6 +400,17 @@ const persistLocationUpdate = async (driverId, location) => {
     }
 
     try {
+        // ✅ FIX: Validate driver exists before saving location
+        const driverExists = await prisma.user.findUnique({
+            where: { id: driverId },
+            select: { id: true },
+        });
+        
+        if (!driverExists) {
+            console.warn(`⚠️ Cannot save location - driver ${driverId} not found in database`);
+            return null;
+        }
+        
         await prisma.locationUpdate.create({
             data: {
                 driverId,
@@ -1399,6 +1410,62 @@ module.exports = (io, socket, driverId, companyId, queueService) => {
             });
         } catch (error) {
             console.error('Failed to fetch queue position:', error);
+        }
+    });
+
+    // ✅ LOCATION UPDATE: Save driver's real-time GPS location
+    socket.on('driver:location:update', async (payload = {}) => {
+        try {
+            const { location, appState } = payload;
+
+            if (!location || !location.latitude || !location.longitude) {
+                console.warn('driver:location:update: missing location data');
+                return;
+            }
+
+            // ✅ FIX: Validate driver exists before saving location
+            const driverExists = await prisma.user.findUnique({
+                where: { id: driverId },
+                select: { id: true },
+            });
+            
+            if (!driverExists) {
+                console.warn(`⚠️ driver:location:update - driver ${driverId} not found in database`);
+                return;
+            }
+
+            // Save location to LocationUpdate table
+            await prisma.locationUpdate.create({
+                data: {
+                    driverId,
+                    latitude: sanitizeNumber(location.latitude),
+                    longitude: sanitizeNumber(location.longitude),
+                    accuracy: sanitizeNumber(location.accuracy) || 0,
+                    heading: sanitizeNumber(location.heading) || 0,
+                    speed: sanitizeNumber(location.speed) || 0,
+                    timestamp: safeDate(location.timestamp) || new Date(),
+                },
+            });
+
+            // Broadcast location to dispatch/owner panels
+            const locationPayload = {
+                driverId,
+                companyId,
+                location: {
+                    latitude: location.latitude,
+                    longitude: location.longitude,
+                    accuracy: location.accuracy,
+                    heading: location.heading,
+                    speed: location.speed,
+                },
+                appState,
+                timestamp: location.timestamp || timestampNow(),
+            };
+
+            broadcastToRooms(dispatchNamespace, dispatchRooms, 'driver:location:updated', locationPayload);
+            ownerRooms.forEach((room) => ownerNamespace.to(room).emit('driver:location:updated', locationPayload));
+        } catch (error) {
+            console.error('Failed to process location update:', error);
         }
     });
 

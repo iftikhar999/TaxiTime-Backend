@@ -93,4 +93,398 @@ router.get('/:zoneId/tariffs', async (req, res) => {
   }
 });
 
+// GET /api/mobile/driver/zones/refresh
+// Refresh and get all active zones for the driver's company
+router.get('/refresh', async (req, res) => {
+  try {
+    const driverId = req.user.id;
+    
+    // Get driver with company information
+    const driver = await prisma.driver.findUnique({
+      where: { id: driverId },
+      include: {
+        company: true
+      }
+    });
+
+    if (!driver) {
+      return res.status(404).json({
+        success: false,
+        message: 'Driver not found'
+      });
+    }
+
+    if (!driver.company) {
+      return res.status(400).json({
+        success: false,
+        message: 'Driver not associated with any company'
+      });
+    }
+
+    console.log(`🔄 Refreshing zones for driver ${driverId} in company ${driver.company.name}`);
+
+    // Fetch all active zones for the company with tariffs
+    const zones = await prisma.zone.findMany({
+      where: {
+        companyId: driver.companyId,
+        isActive: true
+      },
+      include: {
+        zoneTariffs: {
+          where: {
+            tariff: {
+              isActive: true
+            }
+          },
+          include: {
+            tariff: {
+              select: {
+                id: true,
+                name: true,
+                description: true,
+                vehicleType: true,
+                baseFare: true,
+                perKmRate: true,
+                perMinuteRate: true,
+                minimumFare: true,
+                waitingFee: true,
+                isActive: true
+              }
+            }
+          }
+        }
+      },
+      orderBy: [
+        { type: 'asc' },
+        { name: 'asc' }
+      ]
+    });
+
+    // Format zones with their tariffs
+    const formattedZones = zones.map(zone => ({
+      id: zone.id,
+      name: zone.name,
+      description: zone.description,
+      type: zone.type,
+      boundaries: zone.boundaries,
+      surgeMultiplier: toNumber(zone.surgeMultiplier, 1.0),
+      isActive: zone.isActive,
+      specialRules: zone.specialRules,
+      tariffCount: zone.zoneTariffs.length,
+      tariffs: zone.zoneTariffs.map(zt => ({
+        zoneTariffId: zt.id,
+        priority: zt.priority,
+        isDefault: zt.isDefault,
+        activeFrom: zt.activeFrom,
+        activeTo: zt.activeTo,
+        daysOfWeek: zt.daysOfWeek,
+        timeFrom: zt.timeFrom,
+        timeTo: zt.timeTo,
+        ...formatTariff(zt.tariff)
+      }))
+    }));
+
+    console.log(`✅ Refreshed ${formattedZones.length} active zones for driver ${driverId}`);
+
+    return res.json({
+      success: true,
+      message: 'Zones refreshed successfully',
+      data: {
+        zones: formattedZones,
+        company: {
+          id: driver.company.id,
+          name: driver.company.name
+        },
+        refreshedAt: new Date().toISOString(),
+        totalZones: formattedZones.length,
+        totalTariffs: formattedZones.reduce((sum, zone) => sum + zone.tariffCount, 0)
+      }
+    });
+  } catch (error) {
+    console.error('❌ Driver zones refresh error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to refresh zones',
+      error: error.message
+    });
+  }
+});
+
+// GET /api/mobile/driver/zones/active
+// Get currently active zones (quick endpoint for real-time checks)
+router.get('/active', async (req, res) => {
+  try {
+    const driverId = req.user.id;
+    
+    const driver = await prisma.driver.findUnique({
+      where: { id: driverId },
+      select: { companyId: true }
+    });
+
+    if (!driver) {
+      return res.status(404).json({
+        success: false,
+        message: 'Driver not found'
+      });
+    }
+
+    // Get only basic zone info for performance
+    const zones = await prisma.zone.findMany({
+      where: {
+        companyId: driver.companyId,
+        isActive: true
+      },
+      select: {
+        id: true,
+        name: true,
+        type: true,
+        boundaries: true,
+        surgeMultiplier: true,
+        isActive: true
+      },
+      orderBy: [
+        { type: 'asc' },
+        { name: 'asc' }
+      ]
+    });
+
+    return res.json({
+      success: true,
+      data: {
+        zones: zones.map(zone => ({
+          id: zone.id,
+          name: zone.name,
+          type: zone.type,
+          boundaries: zone.boundaries,
+          surgeMultiplier: toNumber(zone.surgeMultiplier, 1.0),
+          isActive: zone.isActive
+        })),
+        count: zones.length,
+        lastUpdated: new Date().toISOString()
+      }
+    });
+  } catch (error) {
+    console.error('❌ Driver active zones error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to load active zones'
+    });
+  }
+});
+
+// POST /api/mobile/driver/zones/select
+// Select an operating zone and set driver preferences
+router.post('/select', async (req, res) => {
+  try {
+    const driverId = req.user.id;
+    const { zoneId, tariffId } = req.body;
+
+    if (!zoneId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Zone ID is required'
+      });
+    }
+
+    // Get driver details
+    const driver = await prisma.user.findUnique({
+      where: { id: driverId },
+      include: { company: true }
+    });
+
+    if (!driver) {
+      return res.status(404).json({
+        success: false,
+        message: 'Driver not found'
+      });
+    }
+
+    // Verify zone exists and belongs to driver's company
+    const zone = await prisma.zone.findFirst({
+      where: {
+        id: zoneId,
+        companyId: driver.companyId,
+        isActive: true
+      },
+      include: {
+        zoneTariffs: {
+          include: {
+            tariff: {
+              where: { isActive: true }
+            }
+          },
+          orderBy: { priority: 'asc' }
+        }
+      }
+    });
+
+    if (!zone) {
+      return res.status(404).json({
+        success: false,
+        message: 'Zone not found or not available for your company'
+      });
+    }
+
+    // If tariffId is provided, verify it's valid for this zone
+    let selectedTariff = null;
+    if (tariffId) {
+      const zoneTariff = zone.zoneTariffs.find(zt => zt.tariff.id === tariffId);
+      if (!zoneTariff) {
+        return res.status(400).json({
+          success: false,
+          message: 'Selected tariff is not available for this zone'
+        });
+      }
+      selectedTariff = zoneTariff.tariff;
+    } else {
+      // Auto-select default tariff or first available
+      const defaultTariff = zone.zoneTariffs.find(zt => zt.isDefault);
+      selectedTariff = defaultTariff ? defaultTariff.tariff : zone.zoneTariffs[0]?.tariff;
+    }
+
+    // Update or create driver preferences
+    const driverPreferences = await prisma.driverPreferences.upsert({
+      where: { driverId: driverId },
+      create: {
+        driverId: driverId,
+        selectedZoneId: zoneId,
+        selectedTariffId: selectedTariff?.id,
+        updatedAt: new Date()
+      },
+      update: {
+        selectedZoneId: zoneId,
+        selectedTariffId: selectedTariff?.id,
+        updatedAt: new Date()
+      }
+    });
+
+    // Get available tariffs for this zone
+    const availableTariffs = zone.zoneTariffs
+      .filter(zt => zt.tariff.isActive)
+      .map(zt => ({
+        id: zt.tariff.id,
+        name: zt.tariff.name,
+        description: zt.tariff.description,
+        baseFare: toNumber(zt.tariff.baseFare, 0),
+        perKmRate: toNumber(zt.tariff.perKmRate, 0),
+        perMinuteRate: toNumber(zt.tariff.perMinuteRate, 0),
+        minimumFare: toNumber(zt.tariff.minimumFare, 0),
+        waitingFee: toNumber(zt.tariff.waitingFee, null),
+        airportFee: toNumber(zt.tariff.airportFee, null),
+        tollFee: toNumber(zt.tariff.tollFee, null),
+        extraStopFee: toNumber(zt.tariff.extraStopFee, null),
+        isDefault: zt.isDefault,
+        priority: zt.priority
+      }));
+
+    return res.json({
+      success: true,
+      message: 'Zone selected successfully',
+      data: {
+        selectedZone: {
+          id: zone.id,
+          name: zone.name,
+          type: zone.type,
+          boundaries: zone.boundaries,
+          surgeMultiplier: toNumber(zone.surgeMultiplier, 1.0)
+        },
+        selectedTariff: selectedTariff ? formatTariff(selectedTariff) : null,
+        availableTariffs,
+        preferences: {
+          id: driverPreferences.id,
+          selectedZoneId: driverPreferences.selectedZoneId,
+          selectedTariffId: driverPreferences.selectedTariffId,
+          updatedAt: driverPreferences.updatedAt
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Zone selection error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to select zone'
+    });
+  }
+});
+
+// GET /api/mobile/driver/zones/current
+// Get driver's currently selected zone and tariff
+router.get('/current', async (req, res) => {
+  try {
+    const driverId = req.user.id;
+
+    // Get driver preferences
+    const preferences = await prisma.driverPreferences.findUnique({
+      where: { driverId: driverId },
+      include: {
+        selectedZone: {
+          include: {
+            zoneTariffs: {
+              include: {
+                tariff: {
+                  where: { isActive: true }
+                }
+              },
+              orderBy: { priority: 'asc' }
+            }
+          }
+        },
+        selectedTariff: true
+      }
+    });
+
+    if (!preferences || !preferences.selectedZone) {
+      return res.json({
+        success: true,
+        data: null,
+        message: 'No zone selected yet'
+      });
+    }
+
+    const zone = preferences.selectedZone;
+    const selectedTariff = preferences.selectedTariff;
+
+    // Get available tariffs for current zone
+    const availableTariffs = zone.zoneTariffs
+      .filter(zt => zt.tariff.isActive)
+      .map(zt => ({
+        id: zt.tariff.id,
+        name: zt.tariff.name,
+        description: zt.tariff.description,
+        baseFare: toNumber(zt.tariff.baseFare, 0),
+        perKmRate: toNumber(zt.tariff.perKmRate, 0),
+        perMinuteRate: toNumber(zt.tariff.perMinuteRate, 0),
+        minimumFare: toNumber(zt.tariff.minimumFare, 0),
+        waitingFee: toNumber(zt.tariff.waitingFee, null),
+        isDefault: zt.isDefault,
+        priority: zt.priority,
+        isSelected: zt.tariff.id === selectedTariff?.id
+      }));
+
+    return res.json({
+      success: true,
+      data: {
+        selectedZone: {
+          id: zone.id,
+          name: zone.name,
+          type: zone.type,
+          boundaries: zone.boundaries,
+          surgeMultiplier: toNumber(zone.surgeMultiplier, 1.0)
+        },
+        selectedTariff: selectedTariff ? formatTariff(selectedTariff) : null,
+        availableTariffs,
+        lastUpdated: preferences.updatedAt
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Get current zone error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to get current zone'
+    });
+  }
+});
+
 module.exports = router;

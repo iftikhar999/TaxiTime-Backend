@@ -16,28 +16,54 @@ const buildShiftPayload = async (shift, driverId) => {
     };
 
     try {
-        if (prisma.ride && shift.startTime) {
-            const aggregate = await prisma.ride.aggregate({
+        // ✅ FIX: Use job table instead of ride table for consistency
+        if (shift.startTime) {
+            const jobs = await prisma.job.findMany({
                 where: {
-                    driverId,
+                    assignedDriverId: driverId,
                     status: 'COMPLETED',
-                    completedAt: {
+                    updatedAt: {
                         gte: shift.startTime,
                         lte: new Date()
                     }
                 },
-                _sum: { actualFare: true },
-                _count: { id: true }
+                include: {
+                    trip: {
+                        include: {
+                            Payment: true
+                        }
+                    }
+                }
             });
 
-            const totalEarnings = aggregate?._sum?.actualFare || 0;
-            const totalRides = aggregate?._count?.id || 0;
+            const totalRides = jobs.length;
+            const totalEarnings = jobs.reduce((sum, job) => {
+                // Priority 1: Payment from trip relation
+                if (job.trip?.Payment?.[0]?.driverEarnings) {
+                    return sum + Number.parseFloat(job.trip.Payment[0].driverEarnings);
+                }
+                // Priority 2: Total payment amount
+                if (job.trip?.Payment?.[0]?.amount) {
+                    return sum + Number.parseFloat(job.trip.Payment[0].amount);
+                }
+                // Priority 3: Trip actual fare
+                if (job.trip?.actualFare) {
+                    return sum + Number.parseFloat(job.trip.actualFare);
+                }
+                // Priority 4: Job estimated price
+                if (job.estimatedPrice) {
+                    return sum + Number.parseFloat(job.estimatedPrice);
+                }
+                return sum;
+            }, 0);
 
             stats = {
                 totalEarnings,
                 totalRides,
                 averagePerRide: totalRides > 0 ? totalEarnings / totalRides : 0
             };
+
+            console.log(`📊 Shift stats calculated: ${totalRides} rides, $${totalEarnings.toFixed(2)} earnings`);
         }
     } catch (error) {
         console.warn('Failed to compute shift stats:', error?.message || error);
@@ -141,16 +167,63 @@ router.post('/start', authenticateToken, async (req, res) => {
             });
         }
 
+        // 🔥 CRITICAL CLEANUP: Auto-end any stale shifts (>24 hours old with no endTime)
+        // This prevents orphaned ONLINE shifts from blocking new shift creation
+        const staleShiftsThreshold = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        const staleShifts = await prisma.shift.findMany({
+            where: {
+                driverId: userId,
+                status: 'ONLINE',
+                endTime: null,
+                startTime: {
+                    lt: staleShiftsThreshold
+                }
+            }
+        });
+
+        if (staleShifts.length > 0) {
+            console.warn(`⚠️ Found ${staleShifts.length} stale shift(s) for driver ${userId} - auto-ending them`);
+            for (const staleShift of staleShifts) {
+                try {
+                    await prisma.shift.update({
+                        where: { id: staleShift.id },
+                        data: {
+                            endTime: new Date(),
+                            status: 'OFFLINE',
+                            endLocation: staleShift.startLocation // Use start location as fallback
+                        }
+                    });
+                    console.log(`✅ Auto-ended stale shift: ${staleShift.id} (started: ${staleShift.startTime})`);
+                } catch (error) {
+                    console.error(`❌ Failed to auto-end stale shift ${staleShift.id}:`, error);
+                }
+            }
+        }
+
         // Check if driver already has an active shift
+        // ✅ CRITICAL FIX: Only consider shifts that are:
+        //    1. Still ONLINE status
+        //    2. Have no endTime (not ended)
+        //    3. Started within last 24 hours (prevent stale shifts)
+        const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        
         const existingShift = await prisma.shift.findFirst({
             where: {
                 driverId: userId,
-                status: 'ONLINE'
+                status: 'ONLINE',
+                endTime: null, // ✅ Must not be ended
+                startTime: {
+                    gte: twentyFourHoursAgo // ✅ Must be within last 24 hours
+                }
+            },
+            orderBy: {
+                startTime: 'desc'
             }
         });
 
         if (existingShift) {
             console.log(`Driver ${userId} attempted to start shift but already active. Resuming existing shift.`);
+            console.log(`   Existing shift ID: ${existingShift.id}, Started: ${existingShift.startTime}`);
 
             // Refresh current location snapshot
             if (prisma.locationUpdate?.create && startLocation?.latitude && startLocation?.longitude) {
@@ -313,12 +386,51 @@ router.post('/start', authenticateToken, async (req, res) => {
 
         const shiftPayload = await buildShiftPayload(shiftWithVehicle, userId);
 
+        // Automatically refresh zones when shift starts
+        let activeZones = [];
+        try {
+            const zones = await prisma.zone.findMany({
+                where: {
+                    companyId: driver.companyId,
+                    isActive: true
+                },
+                select: {
+                    id: true,
+                    name: true,
+                    type: true,
+                    boundaries: true,
+                    surgeMultiplier: true,
+                    isActive: true
+                },
+                orderBy: [
+                    { type: 'asc' },
+                    { name: 'asc' }
+                ]
+            });
+
+            activeZones = zones.map(zone => ({
+                id: zone.id,
+                name: zone.name,
+                type: zone.type,
+                boundaries: zone.boundaries,
+                surgeMultiplier: zone.surgeMultiplier ? Number.parseFloat(zone.surgeMultiplier.toString()) : 1,
+                isActive: zone.isActive
+            }));
+
+            console.log(`🔄 Refreshed ${activeZones.length} active zones for driver ${userId} on shift start`);
+        } catch (zoneError) {
+            console.warn('Failed to load zones on shift start:', zoneError.message);
+            // Don't fail shift start if zones can't be loaded
+        }
+
         res.json({
             success: true,
             message: 'Shift started successfully',
             data: {
                 shift: shiftPayload,
-                driverStatus: 'AVAILABLE'
+                driverStatus: 'AVAILABLE',
+                activeZones: activeZones, // Include refreshed zones
+                zonesRefreshedAt: new Date().toISOString()
             }
         });
 
