@@ -92,7 +92,13 @@ router.get('/companies', async (req, res) => {
                 name: true,
                 isActive: true,
                 commissionRate: true,
-                settings: true
+                settings: {
+                    select: {
+                        mapProvider: true,
+                        locationUpdateInterval: true,
+                        heartbeatInterval: true
+                    }
+                }
             },
             orderBy: { legalName: 'asc' }
         });
@@ -108,7 +114,7 @@ router.get('/companies', async (req, res) => {
 router.put('/companies/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const { commissionRate, settings, isActive } = req.body;
+        const { commissionRate, settings, isActive, mapProvider, locationUpdateInterval, heartbeatInterval } = req.body;
 
         const company = await prisma.company.update({
             where: { id },
@@ -128,10 +134,54 @@ router.put('/companies/:id', async (req, res) => {
             }
         });
 
-        res.json({
-            message: 'Company settings updated successfully',
-            company
-        });
+        // Update CompanySettings if provided
+        if (mapProvider || locationUpdateInterval || heartbeatInterval) {
+            // Validate mapProvider
+            if (mapProvider && !['NATIVE', 'GOOGLE_MAPS', 'OPENSTREETMAP'].includes(mapProvider)) {
+                return res.status(400).json({ 
+                    error: 'Invalid map provider. Must be one of: NATIVE, GOOGLE_MAPS, OPENSTREETMAP' 
+                });
+            }
+
+            // Validate intervals
+            if (locationUpdateInterval && (locationUpdateInterval < 1 || locationUpdateInterval > 60)) {
+                return res.status(400).json({ 
+                    error: 'Location update interval must be between 1 and 60 seconds' 
+                });
+            }
+
+            if (heartbeatInterval && (heartbeatInterval < 10 || heartbeatInterval > 300)) {
+                return res.status(400).json({ 
+                    error: 'Heartbeat interval must be between 10 and 300 seconds' 
+                });
+            }
+
+            const companySettings = await prisma.companySettings.upsert({
+                where: { companyId: id },
+                update: {
+                    mapProvider: mapProvider || undefined,
+                    locationUpdateInterval: locationUpdateInterval ? parseInt(locationUpdateInterval) : undefined,
+                    heartbeatInterval: heartbeatInterval ? parseInt(heartbeatInterval) : undefined
+                },
+                create: {
+                    companyId: id,
+                    mapProvider: mapProvider || 'NATIVE',
+                    locationUpdateInterval: locationUpdateInterval ? parseInt(locationUpdateInterval) : 2,
+                    heartbeatInterval: heartbeatInterval ? parseInt(heartbeatInterval) : 30
+                }
+            });
+
+            res.json({
+                message: 'Company settings updated successfully',
+                company,
+                companySettings
+            });
+        } else {
+            res.json({
+                message: 'Company settings updated successfully',
+                company
+            });
+        }
     } catch (error) {
         console.error('Error updating company settings:', error);
         res.status(500).json({ error: 'Failed to update company settings' });
