@@ -13,6 +13,7 @@ require('dotenv').config();
 const TrackingService = require('./services/trackingService');
 const AutoDispatchService = require('./services/autoDispatchService');
 const QueueManagementService = require('./services/queueManagementService');
+const EarningsService = require('./services/earningsService');
 const { initializeCronJobs, stopAllCronJobs } = require('./services/cronManager');
 
 // ===== PERFORMANCE LOGGING & ANALYSIS =====
@@ -38,6 +39,7 @@ const io = new Server(server, {
 const trackingService = new TrackingService(io);
 const autoDispatchService = new AutoDispatchService(io);
 const queueManagementService = new QueueManagementService(io);
+const earningsService = new EarningsService();
 
 // Middleware
 app.use(helmet());
@@ -88,9 +90,9 @@ app.use((req, res, next) => {
   req.trackingService = trackingService;
   req.autoDispatchService = autoDispatchService;
   req.queueManagementService = queueManagementService;
+  req.earningsService = earningsService;
   next();
 });
-
 // Also make services available via app.locals for route files
 app.locals.autoDispatchService = autoDispatchService;
 app.locals.queueManagementService = queueManagementService;
@@ -117,6 +119,9 @@ const driverNamespace = io.of('/driver');
 global.dispatchNamespace = dispatchNamespace;
 global.driverNamespace = driverNamespace;
 global.customerNamespace = customerNamespace;
+
+// Initialize earnings service with socket namespaces for real-time updates
+earningsService.setSocketNamespaces(dispatchNamespace, driverNamespace);
 
 // Dispatch namespace - for company dispatchers and admins
 dispatchNamespace.on('connection', (socket) => {
@@ -369,6 +374,7 @@ driverNamespace.on('connection', (socket) => {
         }
 
         // Get current shift
+        console.log(`🔍 Searching for active shift: driverId=${data.userId}, endTime=null`);
         const currentShift = await prisma.shift.findFirst({
         where: {
             driverId: data.userId,
@@ -378,6 +384,13 @@ driverNamespace.on('connection', (socket) => {
             startTime: 'desc',
           },
         });
+        
+        console.log(`🔍 Shift query result:`, currentShift ? {
+          id: currentShift.id,
+          status: currentShift.status,
+          startTime: currentShift.startTime,
+          endTime: currentShift.endTime,
+        } : 'NO SHIFT FOUND');
 
         if (user) {
           // ✅ FIX: No driver relation - get data from user and preferences
@@ -1097,7 +1110,7 @@ driverNamespace.on('connection', (socket) => {
 
   socket.on('job:progress:update', async (data) => {
     try {
-      const { jobId, status, driverId, timestamp, location, reason } = data;
+      const { jobId, status, driverId, timestamp, location, reason, finalAmount, paymentMethod, completedAt } = data;
       const effectiveDriverId = driverId || socket.userId;
 
       if (!jobId || !status) {
@@ -1105,7 +1118,154 @@ driverNamespace.on('connection', (socket) => {
         return;
       }
 
-      console.log(`📊 Job progress update: ${jobId} → ${status}`);
+      console.log(`📊 Job progress update: ${jobId} → ${status}`, {
+        finalAmount,
+        paymentMethod,
+        location: location ? { lat: location.latitude, lng: location.longitude } : 'none'
+      });
+
+      // ✅ NEW: Handle COMPLETED status - update drop-off location and final amount
+      if (status === 'COMPLETED') {
+        console.log(`🏁 Job ${jobId} COMPLETED - updating drop-off and final amount`);
+
+        const updateData = {
+          status: 'COMPLETED',
+          completedAt: completedAt ? new Date(completedAt) : new Date(),
+          updatedAt: new Date(),
+        };
+
+        // ✅ Update drop-off location if provided
+        if (location && location.latitude && location.longitude) {
+          updateData.dropoffLatitude = location.latitude;
+          updateData.dropoffLongitude = location.longitude;
+          console.log(`📍 Updating drop-off location: ${location.latitude}, ${location.longitude}`);
+        }
+
+        // ✅ Update final amount if provided
+        if (finalAmount) {
+          updateData.finalAmount = finalAmount;
+          updateData.actualFare = finalAmount; // ✅ Also update actualFare for consistency
+          console.log(`💰 Updating final amount: $${finalAmount}`);
+        }
+
+        const updatedJob = await prisma.job.update({
+          where: { id: jobId },
+          data: updateData,
+          include: {
+            company: true,
+            trip: true, // ✅ Include trip to update Ride record
+            driver: {
+              select: {
+                id: true,
+                firstName: true,
+                lastName: true
+              }
+            },
+            passenger: {
+              select: {
+                id: true,
+                firstName: true,
+                lastName: true
+              }
+            }
+          },
+        });
+
+        // ✅ NEW: Update corresponding Ride record if it exists
+        if (updatedJob.tripId) {
+          const rideUpdateData = {
+            status: 'COMPLETED',
+            completedAt: completedAt ? new Date(completedAt) : new Date(),
+            updatedAt: new Date(),
+          };
+
+          // Update drop-off location in Ride destination
+          if (location && location.latitude && location.longitude) {
+            const existingRide = await prisma.ride.findUnique({
+              where: { id: updatedJob.tripId },
+              select: { destination: true }
+            });
+
+            // Parse existing destination JSON
+            const destination = typeof existingRide?.destination === 'object' 
+              ? existingRide.destination 
+              : {};
+
+            // Update with actual drop-off coordinates
+            rideUpdateData.destination = {
+              ...destination,
+              latitude: location.latitude,
+              longitude: location.longitude,
+            };
+          }
+
+          // Update actualFare in Ride
+          if (finalAmount) {
+            rideUpdateData.actualFare = finalAmount;
+          }
+
+          await prisma.ride.update({
+            where: { id: updatedJob.tripId },
+            data: rideUpdateData,
+          });
+
+          console.log(`✅ Updated Ride ${updatedJob.tripId} with COMPLETED status`);
+        }
+
+        // ✅ Update driver status to AVAILABLE
+        await prisma.user.update({
+          where: { id: effectiveDriverId },
+          data: {
+            preferences: {
+              driverStatus: 'AVAILABLE',
+              lastStatusChange: new Date().toISOString(),
+            },
+          },
+        });
+
+        console.log(`✅ Job ${jobId} COMPLETED - driver ${effectiveDriverId} set to AVAILABLE`);
+
+        // Notify dispatcher
+        const dispatchPayload = {
+          jobId,
+          internalJobId: updatedJob.id,
+          driverId: effectiveDriverId,
+          status: 'COMPLETED',
+          finalAmount,
+          paymentMethod,
+          dropOffLocation: location ? {
+            latitude: location.latitude,
+            longitude: location.longitude
+          } : null,
+          timestamp: timestamp || new Date().toISOString(),
+          companyId: updatedJob.companyId,
+        };
+
+        dispatchNamespace
+          .to(`dispatch_${updatedJob.companyId}`)
+          .emit('job:completed', dispatchPayload);
+
+        dispatchNamespace
+          .to(`dispatch_${updatedJob.companyId}`)
+          .emit('job:updated', dispatchPayload);
+
+        // ✅ Broadcast driver status change to AVAILABLE
+        dispatchNamespace
+          .to(`dispatch_${updatedJob.companyId}`)
+          .emit('driver:status:updated', {
+            driverId: effectiveDriverId,
+            status: 'AVAILABLE',
+            timestamp: new Date().toISOString(),
+          });
+
+        socket.emit('job:progress:success', {
+          success: true,
+          jobId,
+          status: 'COMPLETED',
+        });
+
+        return; // ✅ Exit early after handling COMPLETED
+      }
 
       // Handle NO_SHOW and RECALLED - return job to UNASSIGNED pool
       if (status === 'NO_SHOW' || status === 'RECALLED' || status === 'NOSHOW') {
@@ -1784,6 +1944,8 @@ app.use('/api/owner/vehicles', require('./routes/owner-vehicles'));
 
 // Mobile API routes - MUST come before admin routes to prevent conflicts
 app.use('/api/mobile', require('./src/routes/mobile'));
+// Driver earnings API - MUST come before other mobile routes for priority
+app.use('/api/mobile/driver/earnings', require('./src/routes/mobile/driverEarnings'));
 // Company data endpoints (accessible by drivers) - MUST be before admin companies route
 app.use('/api/companies', require('./src/routes/mobile/driverCompanyData'));
 app.use('/api/owner/drivers', require('./routes/owner-drivers'));
