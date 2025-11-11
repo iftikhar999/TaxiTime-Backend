@@ -224,7 +224,7 @@ async function seedVehicleTypes() {
   
   for (const vType of MASTER_DATA.vehicleTypes) {
     try {
-      await prisma.vehicleType.upsert({
+      await prisma.vehicle_types.upsert({
         where: { id: vType.id },
         update: vType,
         create: {
@@ -242,30 +242,16 @@ async function seedVehicleTypes() {
 
 async function seedPaymentMethods() {
   console.log('\n📍 [3/6] Seeding Payment Methods...');
-  
-  for (const pm of MASTER_DATA.paymentMethods) {
-    try {
-      await prisma.paymentMethod.upsert({
-        where: { id: pm.id },
-        update: pm,
-        create: {
-          ...pm,
-          createdAt: new Date(),
-          updatedAt: new Date()
-        }
-      });
-      console.log(`   ✅ ${pm.name}`);
-    } catch (error) {
-      console.error(`   ❌ Error creating ${pm.name}:`, error.message);
-    }
-  }
+  console.log('   ⚠️  Payment methods table does not exist in schema - skipping');
+  // Payment methods are handled differently in this schema
+  // They may be stored in company_settings or as enum values
 }
 
 async function seedGlobalConfig() {
   console.log('\n📍 [4/6] Seeding Global Configuration...');
   
   try {
-    const config = await prisma.globalConfig.upsert({
+    const config = await prisma.global_configurations.upsert({
       where: { id: 'global_config_main' },
       update: {
         ...MASTER_DATA.globalConfig,
