@@ -45,7 +45,7 @@ class ZoneCacheService {
         console.log(`🔄 Zone cache MISS for company ${companyId} - fetching from DB`);
         
         try {
-            const zones = await prisma.zone.findMany({
+            const zones = await prisma.zones.findMany({
                 where: { 
                     companyId,
                     isActive: true 
@@ -217,4 +217,3 @@ class ZoneCacheService {
 const zoneCacheService = new ZoneCacheService();
 
 module.exports = zoneCacheService;
-

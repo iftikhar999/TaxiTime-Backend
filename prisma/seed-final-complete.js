@@ -77,7 +77,7 @@ async function main() {
         await prisma.notification.deleteMany();
         await prisma.locationUpdate.deleteMany();
         await prisma.offer.deleteMany();
-        await prisma.assignment.deleteMany();
+        await prisma.assignments.deleteMany();
         await prisma.alarm.deleteMany();
         await prisma.supportTicket.deleteMany();
         await prisma.shift.deleteMany();

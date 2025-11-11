@@ -1,49 +1,20 @@
 const express = require('express');
-const { PrismaClient } = require('@prisma/client');
+const { v4: uuidv4 } = require('uuid');
+const prisma = require('../lib/prisma');
 const { authenticateToken, authorizeRoles } = require('../middleware/auth');
+const { companyMiddleware } = require('../middleware/company');
 
-const prisma = new PrismaClient();
+
 const router = express.Router();
 
 router.use(authenticateToken);
-router.use(authorizeRoles('OWNER', 'COMPANY_ADMIN'));
-
-// Scope to company middleware
-const scopeToCompany = async (req, res, next) => {
-    try {
-        const user = await prisma.user.findUnique({
-            where: { id: req.user.id },
-            include: {
-                ownedCompany: true,
-                company: true
-            }
-        });
-
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-
-        if (user.role === 'OWNER' && user.ownedCompany) {
-            req.companyId = user.ownedCompany.id;
-        } else if (user.role === 'COMPANY_ADMIN' && user.companyId) {
-            req.companyId = user.companyId;
-        } else {
-            return res.status(403).json({ error: 'User not associated with a company' });
-        }
-
-        next();
-    } catch (error) {
-        console.error('Company scope error:', error);
-        res.status(500).json({ error: 'Internal server error' });
-    }
-};
-
-router.use(scopeToCompany);
+router.use(authorizeRoles('OWNER', 'COMPANY_ADMIN', 'ADMIN', 'SUPER_ADMIN'));
+router.use(companyMiddleware);
 
 // GET /api/owner/zones - Get all zones (simplified)
 router.get('/', async (req, res) => {
     try {
-        const zones = await prisma.zone.findMany({
+        const zones = await prisma.zones.findMany({
             where: { companyId: req.companyId },
             orderBy: { createdAt: 'desc' }
         });
@@ -58,7 +29,7 @@ router.get('/', async (req, res) => {
 // GET /api/owner/zones/:zoneId - Get single zone
 router.get('/:zoneId', async (req, res) => {
     try {
-        const zone = await prisma.zone.findFirst({
+        const zone = await prisma.zones.findFirst({
             where: {
                 id: req.params.zoneId,
                 companyId: req.companyId
@@ -85,14 +56,16 @@ router.post('/', async (req, res) => {
             return res.status(400).json({ error: 'Name and boundaries are required' });
         }
 
-        const zone = await prisma.zone.create({
+        const zone = await prisma.zones.create({
             data: {
+                id: uuidv4(),
                 name,
                 description,
                 boundaries,
                 type,
                 isActive,
-                companyId: req.companyId
+                companyId: req.companyId,
+                updatedAt: new Date()
             }
         });
 
@@ -108,7 +81,7 @@ router.put('/:zoneId', async (req, res) => {
     try {
         const { name, description, boundaries, isActive } = req.body;
 
-        const zone = await prisma.zone.findFirst({
+        const zone = await prisma.zones.findFirst({
             where: {
                 id: req.params.zoneId,
                 companyId: req.companyId
@@ -119,7 +92,7 @@ router.put('/:zoneId', async (req, res) => {
             return res.status(404).json({ error: 'Zone not found' });
         }
 
-        const updatedZone = await prisma.zone.update({
+        const updatedZone = await prisma.zones.update({
             where: { id: req.params.zoneId },
             data: {
                 ...(name && { name }),
@@ -140,7 +113,7 @@ router.put('/:zoneId', async (req, res) => {
 // DELETE /api/owner/zones/:zoneId - Delete zone
 router.delete('/:zoneId', async (req, res) => {
     try {
-        const zone = await prisma.zone.findFirst({
+        const zone = await prisma.zones.findFirst({
             where: {
                 id: req.params.zoneId,
                 companyId: req.companyId
@@ -152,12 +125,12 @@ router.delete('/:zoneId', async (req, res) => {
         }
 
         // Delete zone-tariff relationships first
-        await prisma.zoneTariff.deleteMany({
+        await prisma.zone_tariffs.deleteMany({
             where: { zoneId: req.params.zoneId }
         });
 
         // Delete zone
-        await prisma.zone.delete({
+        await prisma.zones.delete({
             where: { id: req.params.zoneId }
         });
 
@@ -171,7 +144,7 @@ router.delete('/:zoneId', async (req, res) => {
 // GET /api/owner/zones/:zoneId/tariffs - Get tariffs linked to zone
 router.get('/:zoneId/tariffs', async (req, res) => {
     try {
-        const zone = await prisma.zone.findFirst({
+        const zone = await prisma.zones.findFirst({
             where: {
                 id: req.params.zoneId,
                 companyId: req.companyId
@@ -182,7 +155,7 @@ router.get('/:zoneId/tariffs', async (req, res) => {
             return res.status(404).json({ error: 'Zone not found' });
         }
 
-        const zoneTariffs = await prisma.zoneTariff.findMany({
+        const zoneTariffs = await prisma.zone_tariffs.findMany({
             where: { zoneId: req.params.zoneId },
             include: {
                 tariff: true
@@ -208,7 +181,7 @@ router.post('/:zoneId/tariffs', async (req, res) => {
             return res.status(400).json({ error: 'tariffIds array is required' });
         }
 
-        const zone = await prisma.zone.findFirst({
+        const zone = await prisma.zones.findFirst({
             where: {
                 id: req.params.zoneId,
                 companyId: req.companyId
@@ -220,7 +193,7 @@ router.post('/:zoneId/tariffs', async (req, res) => {
         }
 
         // Verify tariffs belong to company
-        const tariffs = await prisma.tariff.findMany({
+        const tariffs = await prisma.tariffs.findMany({
             where: {
                 id: { in: tariffIds },
                 companyId: req.companyId
@@ -234,7 +207,7 @@ router.post('/:zoneId/tariffs', async (req, res) => {
         // Create zone-tariff links
         const links = await Promise.all(
             tariffIds.map(tariffId =>
-                prisma.zoneTariff.upsert({
+                prisma.zone_tariffs.upsert({
                     where: {
                         zoneId_tariffId: {
                             zoneId: req.params.zoneId,
@@ -264,7 +237,7 @@ router.post('/:zoneId/tariffs', async (req, res) => {
 // DELETE /api/owner/zones/:zoneId/tariffs/:tariffId - Unlink tariff from zone
 router.delete('/:zoneId/tariffs/:tariffId', async (req, res) => {
     try {
-        const zone = await prisma.zone.findFirst({
+        const zone = await prisma.zones.findFirst({
             where: {
                 id: req.params.zoneId,
                 companyId: req.companyId
@@ -275,7 +248,7 @@ router.delete('/:zoneId/tariffs/:tariffId', async (req, res) => {
             return res.status(404).json({ error: 'Zone not found' });
         }
 
-        await prisma.zoneTariff.deleteMany({
+        await prisma.zone_tariffs.deleteMany({
             where: {
                 zoneId: req.params.zoneId,
                 tariffId: req.params.tariffId
@@ -292,7 +265,7 @@ router.delete('/:zoneId/tariffs/:tariffId', async (req, res) => {
 // PUT /api/owner/zones/:zoneId/tariffs/:tariffId/default - Set default tariff for zone
 router.put('/:zoneId/tariffs/:tariffId/default', async (req, res) => {
     try {
-        const zone = await prisma.zone.findFirst({
+        const zone = await prisma.zones.findFirst({
             where: {
                 id: req.params.zoneId,
                 companyId: req.companyId
@@ -304,13 +277,13 @@ router.put('/:zoneId/tariffs/:tariffId/default', async (req, res) => {
         }
 
         // Remove default from other tariffs in this zone
-        await prisma.zoneTariff.updateMany({
+        await prisma.zone_tariffs.updateMany({
             where: { zoneId: req.params.zoneId },
             data: { isDefault: false }
         });
 
         // Set this tariff as default
-        await prisma.zoneTariff.updateMany({
+        await prisma.zone_tariffs.updateMany({
             where: {
                 zoneId: req.params.zoneId,
                 tariffId: req.params.tariffId

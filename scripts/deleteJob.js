@@ -39,7 +39,7 @@ async function deleteJobAndFreeDriver() {
     const offersDeleted = await prisma.offer.deleteMany({ where: { jobId: job.id } });
     console.log(`   - Deleted ${offersDeleted.count} offer(s)`);
     
-    const assignmentsDeleted = await prisma.assignment.deleteMany({ where: { jobId: job.id } });
+    const assignmentsDeleted = await prisma.assignments.deleteMany({ where: { jobId: job.id } });
     console.log(`   - Deleted ${assignmentsDeleted.count} assignment(s)`);
     
     const locationsDeleted = await prisma.locationUpdate.deleteMany({ where: { jobId: job.id } });

@@ -5,12 +5,15 @@
  */
 
 const express = require('express');
+const { v4: uuidv4 } = require('uuid');
 const router = express.Router();
 const prisma = require('../lib/prisma');
 const { authenticateToken, authorizeRoles } = require('../middleware/auth');
+const { companyMiddleware } = require('../middleware/company');
 
 router.use(authenticateToken);
-router.use(authorizeRoles('OWNER', 'ADMIN', 'COMPANY_ADMIN'));
+router.use(authorizeRoles('OWNER', 'ADMIN', 'COMPANY_ADMIN', 'SUPER_ADMIN'));
+router.use(companyMiddleware);
 
 // ═══════════════════════════════════════════════════════════
 // GET /api/owner/zones/:zoneId/tariffs - Get tariffs for zone
@@ -18,10 +21,10 @@ router.use(authorizeRoles('OWNER', 'ADMIN', 'COMPANY_ADMIN'));
 router.get('/:zoneId/tariffs', async (req, res) => {
     try {
         const { zoneId } = req.params;
-        const { companyId } = req.user;
+        const companyId = req.companyId;
 
         // Verify zone ownership
-        const zone = await prisma.zone.findFirst({
+        const zone = await prisma.zones.findFirst({
             where: { id: zoneId, companyId }
         });
 
@@ -33,10 +36,10 @@ router.get('/:zoneId/tariffs', async (req, res) => {
         }
 
         // Get linked tariffs
-        const zoneTariffs = await prisma.zoneTariff.findMany({
+        const zoneTariffs = await prisma.zone_tariffs.findMany({
             where: { zoneId },
             include: {
-                tariff: {
+                tariffs: {
                     include: {
                         _count: {
                             select: {
@@ -53,18 +56,21 @@ router.get('/:zoneId/tariffs', async (req, res) => {
 
         res.json({
             success: true,
-            data: zoneTariffs.map(zt => ({
-                ...zt.tariff,
-                linkId: zt.id,
-                isDefault: zt.isDefault,
-                priority: zt.priority,
-                activeFrom: zt.activeFrom,
-                activeTo: zt.activeTo,
-                daysOfWeek: zt.daysOfWeek,
-                timeFrom: zt.timeFrom,
-                timeTo: zt.timeTo,
-                ridesCount: zt.tariff._count.rides
-            })),
+            data: zoneTariffs.map((zt) => {
+                const tariff = zt.tariffs;
+                return {
+                    ...tariff,
+                    linkId: zt.id,
+                    isDefault: zt.isDefault,
+                    priority: zt.priority,
+                    activeFrom: zt.activeFrom,
+                    activeTo: zt.activeTo,
+                    daysOfWeek: zt.daysOfWeek,
+                    timeFrom: zt.timeFrom,
+                    timeTo: zt.timeTo,
+                    ridesCount: tariff?._count?.rides || 0
+                };
+            }),
             total: zoneTariffs.length
         });
 
@@ -84,7 +90,7 @@ router.get('/:zoneId/tariffs', async (req, res) => {
 router.post('/:zoneId/tariffs', async (req, res) => {
     try {
         const { zoneId } = req.params;
-        const { companyId } = req.user;
+        const companyId = req.companyId;
         const { tariffIds, setAsDefault } = req.body;
 
         if (!tariffIds || !Array.isArray(tariffIds) || tariffIds.length === 0) {
@@ -95,7 +101,7 @@ router.post('/:zoneId/tariffs', async (req, res) => {
         }
 
         // Verify zone ownership
-        const zone = await prisma.zone.findFirst({
+        const zone = await prisma.zones.findFirst({
             where: { id: zoneId, companyId }
         });
 
@@ -107,7 +113,7 @@ router.post('/:zoneId/tariffs', async (req, res) => {
         }
 
         // Verify all tariffs belong to company
-        const tariffs = await prisma.tariff.findMany({
+        const tariffs = await prisma.tariffs.findMany({
             where: {
                 id: { in: tariffIds },
                 companyId
@@ -123,7 +129,7 @@ router.post('/:zoneId/tariffs', async (req, res) => {
 
         // If setting as default, clear other defaults first
         if (setAsDefault) {
-            await prisma.zoneTariff.updateMany({
+            await prisma.zone_tariffs.updateMany({
                 where: {
                     zoneId,
                     isDefault: true
@@ -135,7 +141,7 @@ router.post('/:zoneId/tariffs', async (req, res) => {
         }
 
         // Get current max priority
-        const maxPriority = await prisma.zoneTariff.aggregate({
+        const maxPriority = await prisma.zone_tariffs.aggregate({
             where: { zoneId },
             _max: { priority: true }
         });
@@ -144,22 +150,30 @@ router.post('/:zoneId/tariffs', async (req, res) => {
 
         // Create zone-tariff links
         const zoneTariffData = tariffIds.map((tariffId, index) => ({
+            id: uuidv4(),
             zoneId,
             tariffId,
             priority: startPriority + index,
-            isDefault: setAsDefault && index === 0
+            isDefault: Boolean(setAsDefault && index === 0)
         }));
 
-        await prisma.zoneTariff.createMany({
+        await prisma.zone_tariffs.createMany({
             data: zoneTariffData,
             skipDuplicates: true
         });
 
         // Fetch updated zone tariffs
-        const updatedZoneTariffs = await prisma.zoneTariff.findMany({
+        const updatedZoneTariffs = await prisma.zone_tariffs.findMany({
             where: { zoneId },
             include: {
-                tariff: true
+                tariffs: {
+                    select: {
+                        id: true,
+                        name: true,
+                        isActive: true,
+                        description: true
+                    }
+                }
             },
             orderBy: {
                 priority: 'desc'
@@ -169,7 +183,19 @@ router.post('/:zoneId/tariffs', async (req, res) => {
         res.json({
             success: true,
             message: `Linked ${tariffIds.length} tariff(s) to zone`,
-            data: updatedZoneTariffs
+            data: updatedZoneTariffs.map((zt) => ({
+                linkId: zt.id,
+                zoneId: zt.zoneId,
+                tariffId: zt.tariffId,
+                isDefault: zt.isDefault,
+                priority: zt.priority,
+                activeFrom: zt.activeFrom,
+                activeTo: zt.activeTo,
+                daysOfWeek: zt.daysOfWeek,
+                timeFrom: zt.timeFrom,
+                timeTo: zt.timeTo,
+                tariff: zt.tariffs
+            }))
         });
 
     } catch (error) {
@@ -196,10 +222,10 @@ router.post('/:zoneId/tariffs', async (req, res) => {
 router.delete('/:zoneId/tariffs/:tariffId', async (req, res) => {
     try {
         const { zoneId, tariffId } = req.params;
-        const { companyId } = req.user;
+        const companyId = req.companyId;
 
         // Verify zone ownership
-        const zone = await prisma.zone.findFirst({
+        const zone = await prisma.zones.findFirst({
             where: { id: zoneId, companyId }
         });
 
@@ -211,7 +237,7 @@ router.delete('/:zoneId/tariffs/:tariffId', async (req, res) => {
         }
 
         // Find and delete the link
-        const zoneTariff = await prisma.zoneTariff.findFirst({
+        const zoneTariff = await prisma.zone_tariffs.findFirst({
             where: {
                 zoneId,
                 tariffId
@@ -225,7 +251,7 @@ router.delete('/:zoneId/tariffs/:tariffId', async (req, res) => {
             });
         }
 
-        await prisma.zoneTariff.delete({
+        await prisma.zone_tariffs.delete({
             where: { id: zoneTariff.id }
         });
 
@@ -251,10 +277,10 @@ router.delete('/:zoneId/tariffs/:tariffId', async (req, res) => {
 router.put('/:zoneId/tariffs/:tariffId/default', async (req, res) => {
     try {
         const { zoneId, tariffId } = req.params;
-        const { companyId } = req.user;
+        const companyId = req.companyId;
 
         // Verify zone ownership
-        const zone = await prisma.zone.findFirst({
+        const zone = await prisma.zones.findFirst({
             where: { id: zoneId, companyId }
         });
 
@@ -266,7 +292,7 @@ router.put('/:zoneId/tariffs/:tariffId/default', async (req, res) => {
         }
 
         // Verify link exists
-        const zoneTariff = await prisma.zoneTariff.findFirst({
+        const zoneTariff = await prisma.zone_tariffs.findFirst({
             where: { zoneId, tariffId }
         });
 
@@ -278,13 +304,13 @@ router.put('/:zoneId/tariffs/:tariffId/default', async (req, res) => {
         }
 
         // Clear all defaults for this zone
-        await prisma.zoneTariff.updateMany({
+        await prisma.zone_tariffs.updateMany({
             where: { zoneId },
             data: { isDefault: false }
         });
 
         // Set this one as default
-        await prisma.zoneTariff.update({
+        await prisma.zone_tariffs.update({
             where: { id: zoneTariff.id },
             data: { isDefault: true }
         });
@@ -311,7 +337,7 @@ router.put('/:zoneId/tariffs/:tariffId/default', async (req, res) => {
 router.put('/:zoneId/tariffs/reorder', async (req, res) => {
     try {
         const { zoneId } = req.params;
-        const { companyId } = req.user;
+        const companyId = req.companyId;
         const { orderedTariffIds } = req.body;
 
         if (!orderedTariffIds || !Array.isArray(orderedTariffIds)) {
@@ -322,7 +348,7 @@ router.put('/:zoneId/tariffs/reorder', async (req, res) => {
         }
 
         // Verify zone ownership
-        const zone = await prisma.zone.findFirst({
+        const zone = await prisma.zones.findFirst({
             where: { id: zoneId, companyId }
         });
 
@@ -335,7 +361,7 @@ router.put('/:zoneId/tariffs/reorder', async (req, res) => {
 
         // Update priorities
         for (let i = 0; i < orderedTariffIds.length; i++) {
-            await prisma.zoneTariff.updateMany({
+            await prisma.zone_tariffs.updateMany({
                 where: {
                     zoneId,
                     tariffId: orderedTariffIds[i]
@@ -368,11 +394,11 @@ router.put('/:zoneId/tariffs/reorder', async (req, res) => {
 router.put('/:zoneId/tariffs/:tariffId/schedule', async (req, res) => {
     try {
         const { zoneId, tariffId } = req.params;
-        const { companyId } = req.user;
+        const companyId = req.companyId;
         const { activeFrom, activeTo, daysOfWeek, timeFrom, timeTo } = req.body;
 
         // Verify zone ownership
-        const zone = await prisma.zone.findFirst({
+        const zone = await prisma.zones.findFirst({
             where: { id: zoneId, companyId }
         });
 
@@ -384,7 +410,7 @@ router.put('/:zoneId/tariffs/:tariffId/schedule', async (req, res) => {
         }
 
         // Find zone-tariff link
-        const zoneTariff = await prisma.zoneTariff.findFirst({
+        const zoneTariff = await prisma.zone_tariffs.findFirst({
             where: { zoneId, tariffId }
         });
 
@@ -396,7 +422,7 @@ router.put('/:zoneId/tariffs/:tariffId/schedule', async (req, res) => {
         }
 
         // Update schedule
-        const updated = await prisma.zoneTariff.update({
+        const updated = await prisma.zone_tariffs.update({
             where: { id: zoneTariff.id },
             data: {
                 activeFrom: activeFrom ? new Date(activeFrom) : null,

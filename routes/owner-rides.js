@@ -1,48 +1,13 @@
 const express = require('express');
 const prisma = require('../lib/prisma');
 const { authenticateToken, authorizeRoles } = require('../middleware/auth');
+const { companyMiddleware } = require('../middleware/company');
 
 const router = express.Router();
 
 router.use(authenticateToken);
-router.use(authorizeRoles('OWNER', 'COMPANY_ADMIN', 'SUPER_ADMIN'));
-
-const scopeToCompany = async (req, res, next) => {
-    try {
-        const user = await prisma.user.findUnique({
-            where: { id: req.user.id },
-            include: {
-                ownedCompany: true,
-                company: true
-            }
-        });
-
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-
-        if (user.role === 'OWNER' && user.ownedCompany) {
-            req.companyId = user.ownedCompany.id;
-        } else if (user.role === 'COMPANY_ADMIN' && user.companyId) {
-            req.companyId = user.companyId;
-        } else if (user.role === 'SUPER_ADMIN') {
-            const firstCompany = await prisma.company.findFirst();
-            if (!firstCompany) {
-                return res.status(404).json({ error: 'No company found' });
-            }
-            req.companyId = firstCompany.id;
-        } else {
-            return res.status(403).json({ error: 'User not associated with a company' });
-        }
-
-        next();
-    } catch (error) {
-        console.error('Owner ride scope error:', error);
-        res.status(500).json({ error: 'Internal server error' });
-    }
-};
-
-router.use(scopeToCompany);
+router.use(authorizeRoles('OWNER', 'COMPANY_ADMIN', 'ADMIN', 'SUPER_ADMIN'));
+router.use(companyMiddleware);
 
 const parseJsonSafe = (value, fallback = null) => {
     if (value === null || value === undefined) return fallback;
@@ -121,16 +86,20 @@ const formatTariff = (tariff) => {
 const formatRide = (ride) => {
     const fareBreakdown = parseJsonSafe(ride.fareBreakdown, {});
     const stops = parseJsonSafe(ride.stops, []);
+    const passenger = ride.users_rides_passengerIdTousers || ride.passenger;
+    const driver = ride.users_rides_driverIdTousers || ride.driver;
+    const vehicle = ride.vehicles || ride.vehicle;
+    const tariff = ride.tariffs || ride.Tariff;
 
     return {
         id: ride.id,
         rideId: ride.rideId,
         status: ride.status,
         rideType: ride.rideType,
-        passenger: formatUser(ride.passenger),
-        driver: formatUser(ride.driver),
-        vehicle: formatVehicle(ride.vehicle),
-        tariff: formatTariff(ride.Tariff),
+        passenger: formatUser(passenger),
+        driver: formatUser(driver),
+        vehicle: formatVehicle(vehicle),
+        tariff: formatTariff(tariff),
         pickup: formatLocation(ride.pickup),
         destination: formatLocation(ride.destination),
         stops: Array.isArray(stops) ? stops.map(formatLocation) : [],
@@ -231,7 +200,7 @@ const buildRideFilters = (companyId, query = {}) => {
             where.OR = [
                 { rideId: { contains: searchTerm, mode: 'insensitive' } },
                 {
-                    passenger: {
+                    users_rides_passengerIdTousers: {
                         OR: [
                             { firstName: { contains: searchTerm, mode: 'insensitive' } },
                             { lastName: { contains: searchTerm, mode: 'insensitive' } },
@@ -241,7 +210,7 @@ const buildRideFilters = (companyId, query = {}) => {
                     }
                 },
                 {
-                    driver: {
+                    users_rides_driverIdTousers: {
                         OR: [
                             { firstName: { contains: searchTerm, mode: 'insensitive' } },
                             { lastName: { contains: searchTerm, mode: 'insensitive' } },
@@ -265,25 +234,25 @@ router.get('/', async (req, res) => {
         const where = buildRideFilters(req.companyId, req.query);
 
         const [rides, total, statusGroup, aggregates] = await Promise.all([
-            prisma.ride.findMany({
+            prisma.rides.findMany({
                 where,
                 include: {
-                    passenger: true,
-                    driver: true,
-                    vehicle: true,
-                    Tariff: true
+                    users_rides_passengerIdTousers: true,
+                    users_rides_driverIdTousers: true,
+                    vehicles: true,
+                    tariffs: true
                 },
                 orderBy: [{ requestedAt: 'desc' }, { createdAt: 'desc' }],
                 skip,
                 take: pageSize
             }),
-            prisma.ride.count({ where }),
-            prisma.ride.groupBy({
+            prisma.rides.count({ where }),
+            prisma.rides.groupBy({
                 by: ['status'],
                 where,
                 _count: { status: true }
             }),
-            prisma.ride.aggregate({
+            prisma.rides.aggregate({
                 where,
                 _sum: {
                     estimatedFare: true,
@@ -323,20 +292,20 @@ router.get('/:id', async (req, res) => {
     try {
         const { id } = req.params;
 
-        const ride = await prisma.ride.findFirst({
+        const ride = await prisma.rides.findFirst({
             where: {
                 id,
                 companyId: req.companyId
             },
             include: {
-                passenger: true,
-                driver: true,
-                vehicle: true,
-                Tariff: true,
-                Payment: true,
-                RideOffer: {
+                users_rides_passengerIdTousers: true,
+                users_rides_driverIdTousers: true,
+                vehicles: true,
+                tariffs: true,
+                payments: true,
+                ride_offers: {
                     include: {
-                        driver: true
+                        users: true
                     }
                 }
             }
@@ -348,7 +317,7 @@ router.get('/:id', async (req, res) => {
 
         const formatted = formatRide(ride);
 
-        formatted.payments = (ride.Payment || []).map(payment => ({
+        formatted.payments = (ride.payments || []).map(payment => ({
             id: payment.id,
             amount: payment.amount,
             status: payment.status,
@@ -358,13 +327,13 @@ router.get('/:id', async (req, res) => {
             createdAt: payment.createdAt
         }));
 
-        formatted.offers = (ride.RideOffer || []).map(offer => ({
+        formatted.offers = (ride.ride_offers || []).map(offer => ({
             id: offer.id,
             status: offer.status,
             offeredAt: offer.offeredAt,
             respondedAt: offer.respondedAt,
             rejectionReason: offer.rejectionReason,
-            driver: formatUser(offer.driver)
+            driver: formatUser(offer.users)
         }));
 
         res.json({ ride: formatted });

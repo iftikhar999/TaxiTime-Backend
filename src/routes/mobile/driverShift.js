@@ -1,10 +1,10 @@
 const express = require('express');
-const { PrismaClient } = require('@prisma/client');
+const { randomUUID } = require('crypto');
 const { authenticateToken } = require('../../../middleware/auth');
+const prisma = require('../../../lib/prisma');
 // Using console.log for logging (logger utility not available)
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
 const buildShiftPayload = async (shift, driverId) => {
     if (!shift) return null;
@@ -28,33 +28,47 @@ const buildShiftPayload = async (shift, driverId) => {
                     }
                 },
                 include: {
-                    trip: {
-                        include: {
-                            Payment: true
-                        }
-                    }
+                    payments: {
+                        where: {
+                            status: { in: ['COMPLETED', 'PAID'] },
+                        },
+                        select: {
+                            amount: true,
+                            driverEarnings: true,
+                        },
+                        orderBy: { createdAt: 'desc' },
+                        take: 1,
+                    },
+                    rides: {
+                        select: {
+                            actualFare: true,
+                            payments: {
+                                where: {
+                                    status: { in: ['COMPLETED', 'PAID'] },
+                                },
+                                select: {
+                                    amount: true,
+                                    driverEarnings: true,
+                                },
+                                orderBy: { createdAt: 'desc' },
+                                take: 1,
+                            },
+                        },
+                    },
                 }
             });
 
             const totalRides = jobs.length;
             const totalEarnings = jobs.reduce((sum, job) => {
-                // Priority 1: Payment from trip relation
-                if (job.trip?.Payment?.[0]?.driverEarnings) {
-                    return sum + Number.parseFloat(job.trip.Payment[0].driverEarnings);
-                }
-                // Priority 2: Total payment amount
-                if (job.trip?.Payment?.[0]?.amount) {
-                    return sum + Number.parseFloat(job.trip.Payment[0].amount);
-                }
-                // Priority 3: Trip actual fare
-                if (job.trip?.actualFare) {
-                    return sum + Number.parseFloat(job.trip.actualFare);
-                }
-                // Priority 4: Job estimated price
-                if (job.estimatedPrice) {
-                    return sum + Number.parseFloat(job.estimatedPrice);
-                }
-                return sum;
+                const jobPayment = job.payments?.[0];
+                const ridePayment = job.rides?.payments?.[0];
+                const passengerTotal =
+                    Number(jobPayment?.amount ?? 0) ||
+                    Number(ridePayment?.amount ?? 0) ||
+                    Number(job.actualFare ?? 0) ||
+                    Number(job.rides?.actualFare ?? 0) ||
+                    Number(job.estimatedPrice ?? 0);
+                return sum + passengerTotal;
             }, 0);
 
             stats = {
@@ -92,7 +106,7 @@ router.post('/heartbeat', authenticateToken, async (req, res) => {
         console.log(`💓 Heartbeat received from ${source || 'native'} - Driver: ${userId}`);
         
         // Verify shift is active
-        const shift = await prisma.driverShift.findFirst({
+        const shift = await prisma.shift.findFirst({
             where: {
                 id: shiftId,
                 driverId: userId,
@@ -106,7 +120,7 @@ router.post('/heartbeat', authenticateToken, async (req, res) => {
         }
         
         // Update shift last heartbeat time
-        await prisma.driverShift.update({
+        await prisma.shift.update({
             where: { id: shiftId },
             data: {
                 lastHeartbeat: new Date(timestamp || Date.now()),
@@ -260,12 +274,26 @@ router.post('/start', authenticateToken, async (req, res) => {
         // Verify driver is active and has a company
         const driver = await prisma.user.findUnique({
             where: { id: userId },
-            include: {
-                company: true
+            select: {
+                id: true,
+                isActive: true,
+                companyId: true,
+                companies_users_companyIdTocompanies: {
+                    select: {
+                        id: true,
+                        name: true,
+                        brandName: true,
+                        legalName: true,
+                        status: true,
+                        isActive: true
+                    }
+                }
             }
         });
 
-        if (!driver || !driver.isActive || !driver.company) {
+        const driverCompany = driver?.companies_users_companyIdTocompanies ?? null;
+
+        if (!driver || !driver.isActive || !driver.companyId || !driverCompany) {
             return res.status(400).json({
                 success: false,
                 message: 'Driver not authorized to start shift'
@@ -275,7 +303,7 @@ router.post('/start', authenticateToken, async (req, res) => {
         // Verify vehicle if provided
         let vehicle = null;
         if (vehicleId) {
-            vehicle = await prisma.vehicle.findFirst({
+            vehicle = await prisma.vehicles.findFirst({
                 where: {
                     id: vehicleId,
                     driverId: userId,
@@ -292,13 +320,18 @@ router.post('/start', authenticateToken, async (req, res) => {
         }
 
         // Create new shift
+        const shiftId = randomUUID();
+        const now = new Date();
+
         const shift = await prisma.shift.create({
             data: {
+                id: shiftId,
                 driverId: userId,
                 companyId: driver.companyId,
-                startTime: new Date(),
+                startTime: now,
                 startLocation: startLocation,
-                status: 'ONLINE'
+                status: 'ONLINE',
+                updatedAt: now
             }
         });
 
@@ -322,7 +355,7 @@ router.post('/start', authenticateToken, async (req, res) => {
         // Update vehicle availability if provided
         if (vehicle) {
             try {
-                await prisma.vehicle.update({
+                await prisma.vehicles.update({
                     where: { id: vehicleId },
                     data: {
                         isAvailable: false  // Mark as in use
@@ -461,8 +494,8 @@ router.post('/end', authenticateToken, async (req, res) => {
             });
         }
 
-        // Find active shift
-        const activeShift = await prisma.shift.findFirst({
+        // Find active shift - also check recent shifts in case endTime was already set
+        let activeShift = await prisma.shift.findFirst({
             where: {
                 driverId: userId,
                 endTime: null
@@ -471,6 +504,39 @@ router.post('/end', authenticateToken, async (req, res) => {
                 startTime: 'desc'
             }
         });
+
+        // If no active shift found, check if there's a very recent shift (within last minute)
+        // This handles race conditions where shift was already ended
+        if (!activeShift) {
+            const oneMinuteAgo = new Date(Date.now() - 60000);
+            activeShift = await prisma.shift.findFirst({
+                where: {
+                    driverId: userId,
+                    endTime: {
+                        gte: oneMinuteAgo
+                    }
+                },
+                orderBy: {
+                    endTime: 'desc'
+                }
+            });
+
+            if (activeShift) {
+                console.log(`⚠️ Shift ${activeShift.id} was already ended at ${activeShift.endTime}`);
+                return res.json({
+                    success: true,
+                    message: 'Shift was already ended',
+                    data: {
+                        shift: {
+                            id: activeShift.id,
+                            endTime: activeShift.endTime,
+                            totalEarnings: activeShift.totalEarnings || 0,
+                            totalTrips: activeShift.totalTrips || 0
+                        }
+                    }
+                });
+            }
+        }
 
         if (!activeShift) {
             return res.status(400).json({
@@ -483,7 +549,7 @@ router.post('/end', authenticateToken, async (req, res) => {
         const shiftDuration = Math.floor((new Date() - activeShift.startTime) / 1000 / 60); // minutes
 
         // Get shift earnings
-        const shiftEarnings = await prisma.ride.aggregate({
+        const shiftEarnings = await prisma.rides.aggregate({
             where: {
                 driverId: userId,
                 status: 'COMPLETED',
@@ -629,6 +695,15 @@ router.get('/current', authenticateToken, async (req, res) => {
     try {
         const { userId } = req.user;
 
+        if (!userId) {
+            return res.status(401).json({
+                success: false,
+                message: 'User ID is required'
+            });
+        }
+
+        console.log(`🔍 [Shift Current] Fetching active shift for driver: ${userId}`);
+
         // ✅ FIX: Include OFFLINE shifts (driver may have disconnected but shift is still active)
         const activeShift = await prisma.shift.findFirst({
             where: {
@@ -641,6 +716,9 @@ router.get('/current', authenticateToken, async (req, res) => {
             orderBy: {
                 startTime: 'desc'
             }
+        }).catch(err => {
+            console.error('❌ [Shift Current] Database query error:', err);
+            throw new Error('Failed to query active shift from database');
         });
 
         if (!activeShift) {
@@ -653,14 +731,19 @@ router.get('/current', authenticateToken, async (req, res) => {
                 orderBy: {
                     startTime: 'desc'
                 }
+            }).catch(err => {
+                console.warn('⚠️ [Shift Current] Diagnostic query failed:', err);
+                return null;
             });
             
             if (anyShift) {
-                console.warn(`⚠️ Shift mismatch for driver ${userId}:`);
+                console.warn(`⚠️ [Shift Current] Shift status mismatch for driver ${userId}:`);
                 console.warn(`   Shift ID: ${anyShift.id}`);
                 console.warn(`   Current status: ${anyShift.status}`);
                 console.warn(`   Expected status: ONLINE, BUSY, BREAK, or OFFLINE`);
                 console.warn(`   ❌ This shift exists but won't sync to mobile app!`);
+            } else {
+                console.log(`✅ [Shift Current] No active shift found for driver ${userId}`);
             }
             
             return res.json({
@@ -672,7 +755,17 @@ router.get('/current', authenticateToken, async (req, res) => {
             });
         }
 
-        const shiftPayload = await buildShiftPayload(activeShift, userId);
+        console.log(`✅ [Shift Current] Found active shift: ${activeShift.id}, status: ${activeShift.status}`);
+
+        const shiftPayload = await buildShiftPayload(activeShift, userId).catch(err => {
+            console.error('❌ [Shift Current] Error building shift payload:', err);
+            throw new Error('Failed to build shift data');
+        });
+
+        if (!shiftPayload) {
+            console.error('❌ [Shift Current] buildShiftPayload returned null');
+            throw new Error('Invalid shift payload generated');
+        }
 
         res.json({
             success: true,
@@ -683,10 +776,18 @@ router.get('/current', authenticateToken, async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Get current shift error:', error);
+        console.error('❌ [Shift Current] Fatal error:', error);
+        console.error('   User:', req.user?.userId);
+        console.error('   Error details:', error.message);
+        console.error('   Stack:', error.stack);
+        
         res.status(500).json({
             success: false,
-            message: 'Server error fetching current shift'
+            message: 'Server error fetching current shift. Please try again.',
+            error: process.env.NODE_ENV === 'development' ? {
+                message: error.message,
+                type: error.constructor.name
+            } : undefined
         });
     }
 });

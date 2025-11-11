@@ -1,46 +1,17 @@
 const express = require('express');
-const { PrismaClient } = require('@prisma/client');
+const prisma = require('../lib/prisma');
 const { authenticateToken, authorizeRoles } = require('../middleware/auth');
 const multer = require('multer');
 const path = require('path');
+const { companyMiddleware } = require('../middleware/company');
 
 const router = express.Router();
-const prisma = new PrismaClient();
+
 
 // Middleware: Require OWNER or COMPANY_ADMIN role and scope to company
 router.use(authenticateToken);
-router.use(authorizeRoles('OWNER', 'COMPANY_ADMIN'));
-
-const scopeToCompany = async (req, res, next) => {
-    try {
-        const user = await prisma.user.findUnique({
-            where: { id: req.user.id },
-            include: {
-                ownedCompany: true,
-                company: true
-            }
-        });
-
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-
-        if (user.role === 'OWNER' && user.ownedCompany) {
-            req.companyId = user.ownedCompany.id;
-        } else if (user.role === 'COMPANY_ADMIN' && user.companyId) {
-            req.companyId = user.companyId;
-        } else {
-            return res.status(403).json({ error: 'User not associated with any company' });
-        }
-
-        next();
-    } catch (error) {
-        console.error('Company scoping error:', error);
-        res.status(500).json({ error: 'Internal server error' });
-    }
-};
-
-router.use(scopeToCompany);
+router.use(authorizeRoles('OWNER', 'COMPANY_ADMIN', 'ADMIN', 'SUPER_ADMIN'));
+router.use(companyMiddleware);
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
@@ -72,7 +43,7 @@ const upload = multer({
 // GET /api/owner/settings - Get company settings
 router.get('/', async (req, res) => {
     try {
-        const company = await prisma.company.findUnique({
+        const company = await prisma.companies.findUnique({
             where: { id: req.companyId },
             select: {
                 id: true,
@@ -147,7 +118,7 @@ router.put('/', async (req, res) => {
             });
         }
 
-        const updatedCompany = await prisma.company.update({
+        const updatedCompany = await prisma.companies.update({
             where: { id: req.companyId },
             data: {
                 legalName,
@@ -221,7 +192,7 @@ router.post('/logo', upload.single('logo'), async (req, res) => {
 
         const logoUrl = `/uploads/company-logos/${req.file.filename}`;
 
-        const updatedCompany = await prisma.company.update({
+        const updatedCompany = await prisma.companies.update({
             where: { id: req.companyId },
             data: {
                 logoUrl,
@@ -250,7 +221,7 @@ router.post('/logo', upload.single('logo'), async (req, res) => {
 // DELETE /api/owner/settings/logo - Remove company logo
 router.delete('/logo', async (req, res) => {
     try {
-        const company = await prisma.company.findUnique({
+        const company = await prisma.companies.findUnique({
             where: { id: req.companyId },
             select: { logoUrl: true }
         });
@@ -270,7 +241,7 @@ router.delete('/logo', async (req, res) => {
         }
 
         // Update database
-        await prisma.company.update({
+        await prisma.companies.update({
             where: { id: req.companyId },
             data: {
                 logoUrl: null,
@@ -288,7 +259,7 @@ router.delete('/logo', async (req, res) => {
 // GET /api/owner/settings/operational - Get operational settings
 router.get('/operational', async (req, res) => {
     try {
-        const company = await prisma.company.findUnique({
+        const company = await prisma.companies.findUnique({
             where: { id: req.companyId },
             select: {
                 id: true,
@@ -344,7 +315,7 @@ router.put('/operational', async (req, res) => {
             maintenanceMode
         } = req.body;
 
-        const updatedCompany = await prisma.company.update({
+        const updatedCompany = await prisma.companies.update({
             where: { id: req.companyId },
             data: {
                 operatingHours,

@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { PrismaClient } = require('@prisma/client');
 const { auth: authMiddleware } = require('../middleware/auth');
+const { createId } = require('@paralleldrive/cuid2');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs').promises;
@@ -66,40 +67,40 @@ router.get('/:type', async (req, res) => {
 
         switch (type) {
             case 'countries':
-                data = await prisma.country.findMany({
+                data = await prisma.countries.findMany({
                     where: searchCondition,
                     skip,
                     take,
                     orderBy: { name: 'asc' }
                 });
-                total = await prisma.country.count({ where: searchCondition });
+                total = await prisma.countries.count({ where: searchCondition });
                 break;
 
             case 'currencies':
-                data = await prisma.currency.findMany({
+                data = await prisma.currencies.findMany({
                     where: searchCondition,
                     skip,
                     take,
                     orderBy: { name: 'asc' }
                 });
-                total = await prisma.currency.count({ where: searchCondition });
+                total = await prisma.currencies.count({ where: searchCondition });
                 break;
 
             case 'vehicleTypes':
-                data = await prisma.vehicleTypeMaster.findMany({
+                data = await prisma.vehicle_types.findMany({
                     where: searchCondition,
                     skip,
                     take,
                     orderBy: { name: 'asc' }
                 });
-                total = await prisma.vehicleTypeMaster.count({ where: searchCondition });
+                total = await prisma.vehicle_types.count({ where: searchCondition });
                 break;
 
             case 'cities':
-                data = await prisma.serviceCity.findMany({
+                data = await prisma.service_cities.findMany({
                     where: searchCondition,
                     include: {
-                        country: {
+                        countries: {
                             select: { name: true, code: true }
                         }
                     },
@@ -107,27 +108,27 @@ router.get('/:type', async (req, res) => {
                     take,
                     orderBy: { name: 'asc' }
                 });
-                total = await prisma.serviceCity.count({ where: searchCondition });
+                total = await prisma.service_cities.count({ where: searchCondition });
                 break;
 
             case 'fareTypes':
-                data = await prisma.fareType.findMany({
+                data = await prisma.fare_types.findMany({
                     where: searchCondition,
                     skip,
                     take,
                     orderBy: { name: 'asc' }
                 });
-                total = await prisma.fareType.count({ where: searchCondition });
+                total = await prisma.fare_types.count({ where: searchCondition });
                 break;
 
             case 'documents':
-                data = await prisma.documentTypeMaster.findMany({
+                data = await prisma.document_types.findMany({
                     where: searchCondition,
                     skip,
                     take,
                     orderBy: { name: 'asc' }
                 });
-                total = await prisma.documentTypeMaster.count({ where: searchCondition });
+                total = await prisma.document_types.count({ where: searchCondition });
                 break;
 
             default:
@@ -164,75 +165,99 @@ router.post('/:type', async (req, res) => {
         const { type } = req.params;
         const data = req.body;
 
+        // Validate required fields based on type
+        if (type === 'cities' && !data.code) {
+            return res.status(400).json({
+                success: false,
+                message: 'City code is required'
+            });
+        }
+
         let result;
 
         switch (type) {
             case 'countries':
-                result = await prisma.country.create({
+                result = await prisma.countries.create({
                     data: {
+                        id: createId(),
                         name: data.name,
                         code: data.code,
                         phoneCode: data.phoneCode,
-                        isActive: data.isActive || true
+                        isActive: data.isActive || true,
+                        updatedAt: new Date()
                     }
                 });
                 break;
 
             case 'currencies':
-                result = await prisma.currency.create({
+                result = await prisma.currencies.create({
                     data: {
+                        id: createId(),
                         name: data.name,
                         code: data.code,
                         symbol: data.symbol,
-                        exchangeRate: data.exchangeRate || 1.0,
-                        isActive: data.isActive || true
+                        decimalPlaces: data.decimalPlaces || 2,
+                        isActive: data.isActive || true,
+                        updatedAt: new Date()
                     }
                 });
                 break;
 
             case 'vehicleTypes':
-                result = await prisma.vehicleTypeMaster.create({
+                result = await prisma.vehicle_types.create({
                     data: {
+                        id: createId(),
                         name: data.name,
                         code: data.code,
                         description: data.description,
                         capacity: data.capacity || 4,
                         icon: data.icon || null,
-                        isActive: data.isActive !== false
+                        isActive: data.isActive !== false,
+                        updatedAt: new Date()
                     }
                 });
                 break;
 
             case 'cities':
-                result = await prisma.serviceCity.create({
+                result = await prisma.service_cities.create({
                     data: {
+                        id: createId(),
                         name: data.name,
+                        code: data.code,
                         countryId: data.countryId,
-                        timezone: data.timezone,
-                        isActive: data.isActive || true
+                        state: data.state || null,
+                        timezone: data.timezone || 'UTC',
+                        latitude: data.latitude || null,
+                        longitude: data.longitude || null,
+                        isActive: data.isActive || true,
+                        updatedAt: new Date()
                     }
                 });
                 break;
 
             case 'fareTypes':
-                result = await prisma.fareType.create({
+                result = await prisma.fare_types.create({
                     data: {
+                        id: createId(),
                         name: data.name,
                         description: data.description,
                         multiplier: data.multiplier || 1.0,
-                        isActive: data.isActive || true
+                        isActive: data.isActive || true,
+                        updatedAt: new Date()
                     }
                 });
                 break;
 
             case 'documents':
-                result = await prisma.documentType.create({
+                result = await prisma.document_types.create({
                     data: {
+                        id: createId(),
                         name: data.name,
                         description: data.description,
                         isRequired: data.isRequired || false,
                         applicableFor: data.applicableFor || 'BOTH', // DRIVER, VEHICLE, BOTH
-                        isActive: data.isActive || true
+                        isActive: data.isActive || true,
+                        updatedAt: new Date()
                     }
                 });
                 break;
@@ -252,6 +277,17 @@ router.post('/:type', async (req, res) => {
 
     } catch (error) {
         console.error('Error creating master data:', error);
+        
+        // Handle unique constraint violations
+        if (error.code === 'P2002') {
+            const field = error.meta?.target?.[0] || 'field';
+            return res.status(409).json({
+                success: false,
+                message: `A record with this ${field} already exists`,
+                error: `Duplicate ${field}`
+            });
+        }
+        
         res.status(500).json({
             success: false,
             message: 'Failed to create master data',
@@ -270,32 +306,34 @@ router.put('/:type/:id', async (req, res) => {
 
         switch (type) {
             case 'countries':
-                result = await prisma.country.update({
-                    where: { id: parseInt(id) },
+                result = await prisma.countries.update({
+                    where: { id },
                     data: {
                         name: data.name,
                         code: data.code,
                         phoneCode: data.phoneCode,
-                        isActive: data.isActive
+                        isActive: data.isActive,
+                        updatedAt: new Date()
                     }
                 });
                 break;
 
             case 'currencies':
-                result = await prisma.currency.update({
-                    where: { id: parseInt(id) },
+                result = await prisma.currencies.update({
+                    where: { id },
                     data: {
                         name: data.name,
                         code: data.code,
                         symbol: data.symbol,
-                        exchangeRate: data.exchangeRate,
-                        isActive: data.isActive
+                        decimalPlaces: data.decimalPlaces,
+                        isActive: data.isActive,
+                        updatedAt: new Date()
                     }
                 });
                 break;
 
             case 'vehicleTypes':
-                result = await prisma.vehicleTypeMaster.update({
+                result = await prisma.vehicle_types.update({
                     where: { id },
                     data: {
                         name: data.name,
@@ -303,44 +341,52 @@ router.put('/:type/:id', async (req, res) => {
                         description: data.description,
                         capacity: data.capacity,
                         icon: data.icon,
-                        isActive: data.isActive
+                        isActive: data.isActive,
+                        updatedAt: new Date()
                     }
                 });
                 break;
 
             case 'cities':
-                result = await prisma.serviceCity.update({
-                    where: { id: parseInt(id) },
+                result = await prisma.service_cities.update({
+                    where: { id },
                     data: {
                         name: data.name,
+                        code: data.code,
                         countryId: data.countryId,
+                        state: data.state,
                         timezone: data.timezone,
-                        isActive: data.isActive
+                        latitude: data.latitude,
+                        longitude: data.longitude,
+                        isActive: data.isActive,
+                        updatedAt: new Date()
                     }
                 });
                 break;
 
             case 'fareTypes':
-                result = await prisma.fareType.update({
-                    where: { id: parseInt(id) },
+                result = await prisma.fare_types.update({
+                    where: { id },
                     data: {
                         name: data.name,
                         description: data.description,
                         multiplier: data.multiplier,
-                        isActive: data.isActive
+                        isActive: data.isActive,
+                        updatedAt: new Date()
                     }
                 });
                 break;
 
             case 'documents':
-                result = await prisma.documentType.update({
-                    where: { id: parseInt(id) },
+                result = await prisma.document_types.update({
+                    where: { id },
                     data: {
                         name: data.name,
                         description: data.description,
                         isRequired: data.isRequired,
                         applicableFor: data.applicableFor,
-                        isActive: data.isActive
+                        isActive: data.isActive,
+                        updatedAt: new Date()
                     }
                 });
                 break;
@@ -377,38 +423,38 @@ router.delete('/:type/:id', async (req, res) => {
 
         switch (type) {
             case 'countries':
-                result = await prisma.country.delete({
-                    where: { id: parseInt(id) }
+                result = await prisma.countries.delete({
+                    where: { id }
                 });
                 break;
 
             case 'currencies':
-                result = await prisma.currency.delete({
-                    where: { id: parseInt(id) }
+                result = await prisma.currencies.delete({
+                    where: { id }
                 });
                 break;
 
             case 'vehicleTypes':
-                result = await prisma.vehicleTypeMaster.delete({
+                result = await prisma.vehicle_types.delete({
                     where: { id }
                 });
                 break;
 
             case 'cities':
-                result = await prisma.serviceCity.delete({
-                    where: { id: parseInt(id) }
+                result = await prisma.service_cities.delete({
+                    where: { id }
                 });
                 break;
 
             case 'fareTypes':
-                result = await prisma.fareType.delete({
-                    where: { id: parseInt(id) }
+                result = await prisma.fare_types.delete({
+                    where: { id }
                 });
                 break;
 
             case 'documents':
-                result = await prisma.documentType.delete({
-                    where: { id: parseInt(id) }
+                result = await prisma.document_types.delete({
+                    where: { id }
                 });
                 break;
 
@@ -504,12 +550,12 @@ router.delete('/vehicleTypes/delete-icon/:filename', async (req, res) => {
 router.get('/stats/overview', async (req, res) => {
     try {
         const stats = await Promise.all([
-            prisma.country.count({ where: { isActive: true } }),
-            prisma.currency.count({ where: { isActive: true } }),
-            prisma.vehicleTypeMaster.count({ where: { isActive: true } }),
-            prisma.serviceCity.count({ where: { isActive: true } }),
-            prisma.fareType.count({ where: { isActive: true } }),
-            prisma.documentTypeMaster.count({ where: { isActive: true } })
+            prisma.countries.count({ where: { isActive: true } }),
+            prisma.currencies.count({ where: { isActive: true } }),
+            prisma.vehicle_types.count({ where: { isActive: true } }),
+            prisma.service_cities.count({ where: { isActive: true } }),
+            prisma.fare_types.count({ where: { isActive: true } }),
+            prisma.document_types.count({ where: { isActive: true } })
         ]);
 
         res.json({

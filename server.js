@@ -358,8 +358,20 @@ driverNamespace.on('connection', (socket) => {
         // ✅ FIX: User model doesn't have 'driver' relation - User IS the driver
         const user = await prisma.user.findUnique({
           where: { id: data.userId },
-          include: {
-            company: true, // ✅ FIX: Only include company (User doesn't have driver relation)
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            email: true,
+            phone: true,
+            preferences: true,
+            companies_users_companyIdTocompanies: {
+              select: {
+                id: true,
+                legalName: true,
+                brandName: true,
+              },
+            },
           },
         });
 
@@ -367,8 +379,9 @@ driverNamespace.on('connection', (socket) => {
           console.warn(`⚠️ User not found in database: ${data.userId}`);
           return;
         }
-        
-        if (!user.company) {
+
+        const company = user.companies_users_companyIdTocompanies;
+        if (!company) {
           console.warn(`⚠️ Driver not linked to a company: ${data.userId}`);
           return;
         }
@@ -394,7 +407,7 @@ driverNamespace.on('connection', (socket) => {
 
         if (user) {
           // ✅ FIX: No driver relation - get data from user and preferences
-          const prefs = user.preferences || {};
+          const prefs = user.preferences && typeof user.preferences === 'object' ? user.preferences : {};
           const lastLocation = prefs.lastLocation || prefs.currentLocation || {};
           
           // ✅ IMPROVED: Build name from available fields with better fallback
@@ -422,25 +435,31 @@ driverNamespace.on('connection', (socket) => {
             computedName: driverName,
           });
 
-          // ✅ NEW: Fetch selected vehicle from preferences
+          // ✅ DEBUG: Log complete preferences object
+          console.log(`🔍 Driver preferences (raw):`, JSON.stringify(prefs, null, 2));
+
+          // ✅ Fetch selected vehicle from preferences (mobile app syncs here)
           let selectedVehicle = null;
           const selectedVehicleId = prefs.selectedVehicleId || prefs.vehicleId;
           if (selectedVehicleId) {
-            selectedVehicle = await prisma.vehicle.findUnique({
+            selectedVehicle = await prisma.vehicles.findUnique({
               where: { id: selectedVehicleId },
-              include: {
-                vehicleTypeMaster: true,
-              },
             });
+            console.log(`🚗 Fetched vehicle: ${selectedVehicle?.plateNumber || 'NOT FOUND'} (ID: ${selectedVehicleId})`);
+          } else {
+            console.warn(`⚠️ No vehicle ID found in preferences - checking keys:`, Object.keys(prefs));
           }
 
-          // ✅ NEW: Fetch selected tariff from preferences
+          // ✅ Fetch selected tariff from preferences (mobile app syncs here)
           let selectedTariff = null;
           const selectedTariffId = prefs.selectedTariffId || prefs.tariffId;
           if (selectedTariffId) {
-            selectedTariff = await prisma.tariff.findUnique({
+            selectedTariff = await prisma.tariffs.findUnique({
               where: { id: selectedTariffId },
             });
+            console.log(`💰 Fetched tariff: ${selectedTariff?.name || 'NOT FOUND'} (ID: ${selectedTariffId})`);
+          } else {
+            console.warn(`⚠️ No tariff ID found in preferences`);
           }
 
           // ✅ NEW: Fetch active job for this driver
@@ -454,7 +473,7 @@ driverNamespace.on('connection', (socket) => {
               },
             },
             include: {
-              customer: {
+              users_jobs_customerIdTousers: {
                 select: {
                   id: true,
                   firstName: true,
@@ -483,10 +502,10 @@ driverNamespace.on('connection', (socket) => {
               estimatedPrice: activeJobFromDb.estimatedPrice,
               actualFare: activeJobFromDb.actualFare,
               createdAt: activeJobFromDb.createdAt,
-              customer: activeJobFromDb.customer ? {
-                id: activeJobFromDb.customer.id,
-                name: `${activeJobFromDb.customer.firstName || ''} ${activeJobFromDb.customer.lastName || ''}`.trim() || activeJobFromDb.customer.email,
-                phone: activeJobFromDb.customer.phone,
+              customer: activeJobFromDb.users_jobs_customerIdTousers ? {
+                id: activeJobFromDb.users_jobs_customerIdTousers.id,
+                name: `${activeJobFromDb.users_jobs_customerIdTousers.firstName || ''} ${activeJobFromDb.users_jobs_customerIdTousers.lastName || ''}`.trim() || activeJobFromDb.users_jobs_customerIdTousers.email,
+                phone: activeJobFromDb.users_jobs_customerIdTousers.phone,
               } : null,
             };
             console.log(`✅ Found active job for driver: ${activeJobFromDb.id}, status: ${activeJobFromDb.status}`);
@@ -507,7 +526,7 @@ driverNamespace.on('connection', (socket) => {
               make: selectedVehicle.make,
               model: selectedVehicle.model,
               year: selectedVehicle.year,
-              type: selectedVehicle.vehicleTypeMaster?.name,
+              type: selectedVehicle.vehicleType || null,
               color: selectedVehicle.color,
             } : null,
             tariff: selectedTariff ? {
@@ -515,8 +534,10 @@ driverNamespace.on('connection', (socket) => {
               name: selectedTariff.name,
               baseFare: selectedTariff.baseFare,
               perKmRate: selectedTariff.perKmRate,
-              perMinRate: selectedTariff.perMinRate,
-              waitingRate: selectedTariff.waitingRate,
+              perMinuteRate: selectedTariff.perMinuteRate,
+              perMinRate: selectedTariff.perMinuteRate,
+              waitingFee: selectedTariff.waitingFee,
+              waitingRate: selectedTariff.waitingFee,
             } : null,
             job: activeJob,
           });
@@ -692,7 +713,7 @@ driverNamespace.on('connection', (socket) => {
     try {
       // CRITICAL FIX: Automatically set driver to BUSY when meter starts
       if (socket.userId) {
-        await prisma.driver.update({
+        await prisma.user.update({
           where: { id: socket.userId },
           data: {
             status: 'BUSY',
@@ -911,21 +932,10 @@ driverNamespace.on('connection', (socket) => {
           status: 'ASSIGNED',
           updatedAt: new Date(),
         },
-        include: {
-          company: true,
-          customer: {
-            select: {
-              id: true,
-              firstName: true,
-              lastName: true,
-              phone: true,
-            },
-          },
-        },
       });
 
       // Update assignment status
-      await prisma.assignment.updateMany({
+      await prisma.assignments.updateMany({
         where: {
           jobId,
           driverId: effectiveDriverId,
@@ -1015,7 +1025,7 @@ driverNamespace.on('connection', (socket) => {
       }
 
       // Update assignment status
-      await prisma.assignment.updateMany({
+      await prisma.assignments.updateMany({
         where: {
           jobId,
           driverId: effectiveDriverId,
@@ -1050,9 +1060,6 @@ driverNamespace.on('connection', (socket) => {
           status: 'UNASSIGNED',
           assignedDriverId: null,
           updatedAt: new Date(),
-        },
-        include: {
-          company: true,
         },
       });
 
@@ -1130,9 +1137,13 @@ driverNamespace.on('connection', (socket) => {
 
         const updateData = {
           status: 'COMPLETED',
-          completedAt: completedAt ? new Date(completedAt) : new Date(),
           updatedAt: new Date(),
         };
+
+        // ✅ Add completedAt if provided
+        if (completedAt) {
+          updateData.completedAt = new Date(completedAt);
+        }
 
         // ✅ Update drop-off location if provided
         if (location && location.latitude && location.longitude) {
@@ -1142,32 +1153,19 @@ driverNamespace.on('connection', (socket) => {
         }
 
         // ✅ Update final amount if provided
-        if (finalAmount) {
+        if (finalAmount !== undefined && finalAmount !== null) {
+          updateData.actualFare = finalAmount;
           updateData.finalAmount = finalAmount;
-          updateData.actualFare = finalAmount; // ✅ Also update actualFare for consistency
           console.log(`💰 Updating final amount: $${finalAmount}`);
         }
 
         const updatedJob = await prisma.job.update({
           where: { id: jobId },
           data: updateData,
-          include: {
-            company: true,
-            trip: true, // ✅ Include trip to update Ride record
-            driver: {
-              select: {
-                id: true,
-                firstName: true,
-                lastName: true
-              }
-            },
-            passenger: {
-              select: {
-                id: true,
-                firstName: true,
-                lastName: true
-              }
-            }
+          select: {
+            id: true,
+            companyId: true,
+            tripId: true,
           },
         });
 
@@ -1181,7 +1179,7 @@ driverNamespace.on('connection', (socket) => {
 
           // Update drop-off location in Ride destination
           if (location && location.latitude && location.longitude) {
-            const existingRide = await prisma.ride.findUnique({
+            const existingRide = await prisma.rides.findUnique({
               where: { id: updatedJob.tripId },
               select: { destination: true }
             });
@@ -1200,11 +1198,11 @@ driverNamespace.on('connection', (socket) => {
           }
 
           // Update actualFare in Ride
-          if (finalAmount) {
+          if (finalAmount !== undefined && finalAmount !== null) {
             rideUpdateData.actualFare = finalAmount;
           }
 
-          await prisma.ride.update({
+          await prisma.rides.update({
             where: { id: updatedJob.tripId },
             data: rideUpdateData,
           });
@@ -1241,22 +1239,33 @@ driverNamespace.on('connection', (socket) => {
           companyId: updatedJob.companyId,
         };
 
-        dispatchNamespace
-          .to(`dispatch_${updatedJob.companyId}`)
-          .emit('job:completed', dispatchPayload);
+        const rooms = [
+          `dispatch_${updatedJob.companyId}`,
+          `company_${updatedJob.companyId}`,
+          'super_admin',
+        ];
 
-        dispatchNamespace
-          .to(`dispatch_${updatedJob.companyId}`)
-          .emit('job:updated', dispatchPayload);
+        const jobPlain = JSON.parse(JSON.stringify(updatedJob));
+        const jobUpdatePayload = {
+          job: {
+            ...jobPlain,
+            fullRawData: jobPlain,
+          },
+        };
 
-        // ✅ Broadcast driver status change to AVAILABLE
-        dispatchNamespace
-          .to(`dispatch_${updatedJob.companyId}`)
-          .emit('driver:status:updated', {
-            driverId: effectiveDriverId,
-            status: 'AVAILABLE',
-            timestamp: new Date().toISOString(),
-          });
+        const driverStatusPayload = {
+          driverId: effectiveDriverId,
+          status: 'AVAILABLE',
+          timestamp: new Date().toISOString(),
+        };
+
+        rooms.forEach((room) => {
+          dispatchNamespace.to(room).emit('job:completed', dispatchPayload);
+          dispatchNamespace.to(room).emit('job:progress:updated', dispatchPayload);
+          dispatchNamespace.to(room).emit('job:updated', jobUpdatePayload);
+          dispatchNamespace.to(room).emit('job:data:updated', jobUpdatePayload);
+          dispatchNamespace.to(room).emit('driver:status:updated', driverStatusPayload);
+        });
 
         socket.emit('job:progress:success', {
           success: true,
@@ -1272,24 +1281,21 @@ driverNamespace.on('connection', (socket) => {
         console.log(`🔄 ${status}: Returning job ${jobId} to UNASSIGNED pool`);
 
         // Normalize status name
-        const normalizedStatus = status === 'NO_SHOW' || status === 'NOSHOW' ? 'NOSHOW' : 'RECALLED';
+        const normalizedStatus =
+          status === 'NO_SHOW' || status === 'NOSHOW' ? 'NOSHOW' : 'RECALLED';
+        const finalJobStatus = normalizedStatus === 'RECALLED' ? 'UNASSIGNED' : normalizedStatus;
 
-        // ✅ FIX: Keep status as RECALLED/NOSHOW (NOT UNASSIGNED)
-        // The counter logic will add these to the unassigned count
         const updatedJob = await prisma.job.update({
           where: { id: jobId },
           data: {
-            status: normalizedStatus, // ✅ 'RECALLED' or 'NOSHOW'
+            status: finalJobStatus, // ✅ 'UNASSIGNED' for recalled, NOSHOW otherwise
             assignedDriverId: null,
             updatedAt: new Date(),
-          },
-          include: {
-            company: true,
           },
         });
 
         // Update assignment status
-        await prisma.assignment.updateMany({
+        await prisma.assignments.updateMany({
           where: {
             jobId,
             driverId: effectiveDriverId,
@@ -1314,43 +1320,54 @@ driverNamespace.on('connection', (socket) => {
 
         console.log(`✅ Job ${jobId} ${status} - returned to UNASSIGNED by driver ${effectiveDriverId}`);
 
-        // Notify dispatcher that job is back in unassigned pool
         const dispatchPayload = {
           jobId,
           internalJobId: updatedJob.id,
           driverId: effectiveDriverId,
-          status: normalizedStatus, // ✅ 'RECALLED' or 'NOSHOW'
+          status: finalJobStatus, // ✅ 'UNASSIGNED' for recall, 'NOSHOW' otherwise
+          progressStatus: normalizedStatus,
           reason: reason || status,
           timestamp: timestamp || new Date().toISOString(),
           companyId: updatedJob.companyId,
         };
 
-        // Emit to dispatch with appropriate event name
         const eventName = normalizedStatus === 'NOSHOW' ? 'job:noshow' : 'job:recalled';
-        dispatchNamespace
-          .to(`dispatch_${updatedJob.companyId}`)
-          .emit(eventName, dispatchPayload);
+        const rooms = [
+          `dispatch_${updatedJob.companyId}`,
+          `company_${updatedJob.companyId}`,
+          'super_admin',
+        ];
 
-        // Also emit generic job:updated event
-        dispatchNamespace
-          .to(`dispatch_${updatedJob.companyId}`)
-          .emit('job:updated', dispatchPayload);
+        const jobPlain = JSON.parse(JSON.stringify(updatedJob));
+        const jobUpdatePayload = {
+          job: {
+            ...jobPlain,
+            progressStatus: normalizedStatus,
+            fullRawData: jobPlain,
+          },
+        };
 
-        // ✅ Broadcast driver status change to AVAILABLE
-        dispatchNamespace
-          .to(`dispatch_${updatedJob.companyId}`)
-          .emit('driver:status:updated', {
-            driverId: effectiveDriverId,
-            status: 'AVAILABLE',
-            timestamp: new Date().toISOString(),
-          });
+        const driverStatusPayload = {
+          driverId: effectiveDriverId,
+          status: 'AVAILABLE',
+          timestamp: new Date().toISOString(),
+        };
+
+        rooms.forEach((room) => {
+          dispatchNamespace.to(room).emit(eventName, dispatchPayload);
+          dispatchNamespace.to(room).emit('job:progress:updated', dispatchPayload);
+          dispatchNamespace.to(room).emit('job:updated', jobUpdatePayload);
+          dispatchNamespace.to(room).emit('job:data:updated', jobUpdatePayload);
+          dispatchNamespace.to(room).emit('driver:status:updated', driverStatusPayload);
+        });
 
         console.log(`✅ Driver ${effectiveDriverId} status updated to AVAILABLE`);
 
         socket.emit('job:progress:success', {
           success: true,
           jobId,
-          status: normalizedStatus, // ✅ 'RECALLED' or 'NOSHOW'
+          status: finalJobStatus,
+          progressStatus: normalizedStatus,
         });
       } else {
         // For other status updates, just broadcast (handled by existing job flow)
@@ -1411,7 +1428,7 @@ driverNamespace.on('connection', (socket) => {
 
       // CRITICAL FIX: Automatically set driver to AVAILABLE after job completion
       if (socket.userId) {
-        await prisma.driver.update({
+        await prisma.user.update({
           where: { id: socket.userId },
           data: {
             status: 'AVAILABLE',
@@ -1699,7 +1716,7 @@ async function getPlatformStatistics() {
       platformEarnings
     ] = await Promise.all([
       // Total companies
-      prisma.company.count({
+      prisma.companies.count({
         where: { status: 'ACTIVE' }
       }),
 
@@ -1734,7 +1751,7 @@ async function getPlatformStatistics() {
       prisma.job.count({
         where: {
           status: 'COMPLETED',
-          completedAt: {
+          updatedAt: {
             gte: startOfToday
           }
         }
@@ -1744,12 +1761,12 @@ async function getPlatformStatistics() {
       prisma.job.aggregate({
         where: {
           status: 'COMPLETED',
-          completedAt: {
+          updatedAt: {
             gte: startOfToday
           }
         },
         _sum: {
-          totalFare: true
+          actualFare: true
         }
       })
     ]);
@@ -1760,7 +1777,7 @@ async function getPlatformStatistics() {
       totalActiveJobs,
       totalOnlineDrivers,
       totalCompletedToday: completedToday,
-      platformEarningsToday: platformEarnings._sum.totalFare || 0,
+      platformEarningsToday: platformEarnings._sum.actualFare ? Number(platformEarnings._sum.actualFare) : 0,
       lastUpdated: new Date().toISOString()
     };
   } catch (error) {
@@ -1790,14 +1807,14 @@ async function getAllOnlineDrivers() {
         }
       },
       include: {
-        driver: {
+        users: {
           select: {
             id: true,
             firstName: true,
             lastName: true,
             phone: true,
             companyId: true,
-            locationUpdates: {
+            location_updates: {
               orderBy: [
                 { timestamp: 'desc' },
                 { createdAt: 'desc' }
@@ -1809,10 +1826,11 @@ async function getAllOnlineDrivers() {
                 timestamp: true
               }
             },
-            company: {
+            companies_users_companyIdTocompanies: {
               select: {
                 id: true,
-                name: true
+                legalName: true,
+                brandName: true,
               }
             }
           }
@@ -1824,15 +1842,18 @@ async function getAllOnlineDrivers() {
     });
 
     return onlineDrivers.map(shift => {
-      const lastLocation = shift.driver.locationUpdates?.[0] || null;
+      const lastLocation = shift.users.location_updates?.[0] || null;
       return {
-        id: shift.driver.id,
-        firstName: shift.driver.firstName,
-        lastName: shift.driver.lastName,
-        phone: shift.driver.phone,
+        id: shift.users.id,
+        firstName: shift.users.firstName,
+        lastName: shift.users.lastName,
+        phone: shift.users.phone,
         status: shift.status,
-        companyId: shift.driver.companyId,
-        companyName: shift.driver.company?.name || 'Unknown',
+        companyId: shift.users.companyId,
+        companyName:
+          shift.users.companies_users_companyIdTocompanies?.brandName ||
+          shift.users.companies_users_companyIdTocompanies?.legalName ||
+          'Unknown',
         shiftStartTime: shift.startTime,
         location: lastLocation
           ? {
@@ -1863,7 +1884,7 @@ async function getAllActiveJobs() {
         }
       },
       include: {
-        assignedDriver: {
+        users_jobs_assignedDriverIdTousers: {
           select: {
             id: true,
             firstName: true,
@@ -1871,17 +1892,18 @@ async function getAllActiveJobs() {
             companyId: true
           }
         },
-        customer: {
+        users_jobs_customerIdTousers: {
           select: {
             id: true,
             firstName: true,
             lastName: true
           }
         },
-        company: {
+        companies: {
           select: {
             id: true,
-            name: true
+            name: true,
+            legalName: true
           }
         }
       },
@@ -1897,14 +1919,14 @@ async function getAllActiveJobs() {
       dropoffLocation: job.dropoffLocation,
       estimatedFare: job.estimatedFare,
       companyId: job.companyId,
-      companyName: job.company?.name || 'Unknown',
+      companyName: job.companies?.name || job.companies?.legalName || 'Unknown',
       driverId: job.assignedDriverId,
-      driverName: job.assignedDriver
-        ? `${job.assignedDriver.firstName} ${job.assignedDriver.lastName}`
+      driverName: job.users_jobs_assignedDriverIdTousers
+        ? `${job.users_jobs_assignedDriverIdTousers.firstName} ${job.users_jobs_assignedDriverIdTousers.lastName}`
         : null,
       customerId: job.customerId,
-      customerName: job.customer
-        ? `${job.customer.firstName} ${job.customer.lastName}`
+      customerName: job.users_jobs_customerIdTousers
+        ? `${job.users_jobs_customerIdTousers.firstName} ${job.users_jobs_customerIdTousers.lastName}`
         : null,
       createdAt: job.createdAt
     }));
@@ -1937,6 +1959,9 @@ app.use('/api/dispatch-test', require('./routes/dispatch-test'));
 app.use('/api/reports', require('./routes/reports'));
 app.use('/api/configuration', require('./routes/configuration'));
 app.use('/api/cron', require('./routes/cron')); // Cron job management
+
+// ✅ Mobile Driver API Routes (NEW)
+app.use('/api/mobile/driver', require('./routes/mobile/driver'));
 
 // Owner Panel Routes
 app.use('/api/owner', require('./routes/owner'));
@@ -2006,8 +2031,8 @@ app.use('*', (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-const HOST = process.env.HOST || '127.0.0.1';
-// const HOST = process.env.HOST || '0.0.0.0';
+// const HOST = process.env.HOST || '127.0.0.1'; // Localhost only
+const HOST = process.env.HOST || '0.0.0.0'; // Accept connections from network devices
 module.exports = app;
 module.exports.server = server;
 

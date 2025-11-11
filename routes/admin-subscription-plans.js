@@ -51,7 +51,7 @@ router.get('/', async (req, res) => {
         }
 
         const [plans, totalCount] = await Promise.all([
-            prisma.subscriptionPlan.findMany({
+            prisma.subscription_plans.findMany({
                 where,
                 include: {
                     companies: {
@@ -59,7 +59,7 @@ router.get('/', async (req, res) => {
                             _count: {
                                 select: {
                                     vehicles: true,
-                                    companyDrivers: true,
+                                    users_users_companyIdTocompanies: { where: { role: 'DRIVER' } },
                                     rides: true
                                 }
                             }
@@ -77,7 +77,7 @@ router.get('/', async (req, res) => {
                 skip,
                 take: parseInt(limit),
             }),
-            prisma.subscriptionPlan.count({ where }),
+            prisma.subscription_plans.count({ where }),
         ]);
 
         const totalPages = Math.ceil(totalCount / parseInt(limit));
@@ -88,7 +88,7 @@ router.get('/', async (req, res) => {
             companies: plan.companies.map(company => ({
                 ...company,
                 vehicleCount: company._count.vehicles,
-                driverCount: company._count.drivers,
+                driverCount: company._count.users_users_companyIdTocompanies,
                 ridesCount: company._count.rides,
                 totalPaid: 0 // This would be calculated from payment history
             }))
@@ -137,7 +137,7 @@ router.post('/', async (req, res) => {
         }
 
         // Check if plan name already exists
-        const existingPlan = await prisma.subscriptionPlan.findFirst({
+        const existingPlan = await prisma.subscription_plans.findFirst({
             where: {
                 name: {
                     equals: name,
@@ -150,7 +150,7 @@ router.post('/', async (req, res) => {
             return res.status(400).json({ message: 'Subscription plan with this name already exists' });
         }
 
-        const plan = await prisma.subscriptionPlan.create({
+        const plan = await prisma.subscription_plans.create({
             data: {
                 name,
                 description,
@@ -195,7 +195,7 @@ router.put('/:id', async (req, res) => {
         } = req.body;
 
         // Check if plan exists
-        const existingPlan = await prisma.subscriptionPlan.findUnique({
+        const existingPlan = await prisma.subscription_plans.findUnique({
             where: { id: parseInt(id) }
         });
 
@@ -205,7 +205,7 @@ router.put('/:id', async (req, res) => {
 
         // Check if name is being changed and if it conflicts with another plan
         if (name && name !== existingPlan.name) {
-            const nameConflict = await prisma.subscriptionPlan.findFirst({
+            const nameConflict = await prisma.subscription_plans.findFirst({
                 where: {
                     name: {
                         equals: name,
@@ -235,7 +235,7 @@ router.put('/:id', async (req, res) => {
         if (trialDays !== undefined) updateData.trialDays = parseInt(trialDays);
         if (setupFee !== undefined) updateData.setupFee = parseFloat(setupFee);
 
-        const plan = await prisma.subscriptionPlan.update({
+        const plan = await prisma.subscription_plans.update({
             where: { id: parseInt(id) },
             data: updateData
         });
@@ -260,7 +260,7 @@ router.patch('/:id/status', async (req, res) => {
             return res.status(400).json({ message: 'isActive field is required' });
         }
 
-        const plan = await prisma.subscriptionPlan.update({
+        const plan = await prisma.subscription_plans.update({
             where: { id: parseInt(id) },
             data: { isActive }
         });
@@ -284,7 +284,7 @@ router.delete('/:id', async (req, res) => {
         const { id } = req.params;
 
         // Check if plan has any active subscribers
-        const planWithCompanies = await prisma.subscriptionPlan.findUnique({
+        const planWithCompanies = await prisma.subscription_plans.findUnique({
             where: { id: parseInt(id) },
             include: {
                 companies: {
@@ -305,7 +305,7 @@ router.delete('/:id', async (req, res) => {
             });
         }
 
-        await prisma.subscriptionPlan.delete({
+        await prisma.subscription_plans.delete({
             where: { id: parseInt(id) }
         });
 
@@ -324,7 +324,7 @@ router.get('/:id/subscribers', async (req, res) => {
     try {
         const { id } = req.params;
 
-        const plan = await prisma.subscriptionPlan.findUnique({
+        const plan = await prisma.subscription_plans.findUnique({
             where: { id: parseInt(id) },
             include: {
                 companies: {
@@ -369,12 +369,12 @@ router.get('/:id/subscribers', async (req, res) => {
 // Get subscription plan statistics
 router.get('/stats/overview', async (req, res) => {
     try {
-        const totalPlans = await prisma.subscriptionPlan.count();
-        const activePlans = await prisma.subscriptionPlan.count({
+        const totalPlans = await prisma.subscription_plans.count();
+        const activePlans = await prisma.subscription_plans.count({
             where: { isActive: true }
         });
 
-        const totalSubscriptions = await prisma.company.count({
+        const totalSubscriptions = await prisma.companies.count({
             where: {
                 subscriptionPlanId: {
                     not: null
@@ -382,7 +382,7 @@ router.get('/stats/overview', async (req, res) => {
             }
         });
 
-        const activeSubscriptions = await prisma.company.count({
+        const activeSubscriptions = await prisma.companies.count({
             where: {
                 subscriptionPlanId: {
                     not: null
@@ -392,7 +392,7 @@ router.get('/stats/overview', async (req, res) => {
         });
 
         // Calculate revenue (this would typically come from payment records)
-        const plans = await prisma.subscriptionPlan.findMany({
+        const plans = await prisma.subscription_plans.findMany({
             include: {
                 companies: {
                     where: {

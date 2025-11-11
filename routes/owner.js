@@ -1,56 +1,23 @@
 const express = require('express');
-const { PrismaClient } = require('@prisma/client');
+const prisma = require('../lib/prisma');
 const { authenticateToken, authorizeRoles } = require('../middleware/auth');
+const { companyMiddleware } = require('../middleware/company');
 
 const router = express.Router();
-const prisma = new PrismaClient();
+
 
 // Middleware: Require OWNER or COMPANY_ADMIN role for all routes
 router.use(authenticateToken);
-router.use(authorizeRoles('OWNER', 'COMPANY_ADMIN'));
-
-// Middleware: Get company from user token and scope all queries
-const scopeToCompany = async (req, res, next) => {
-    try {
-        const user = await prisma.user.findUnique({
-            where: { id: req.user.id },
-            include: {
-                ownedCompany: true,
-                company: true
-            }
-        });
-
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-
-        // Set companyId based on user role
-        if (user.role === 'OWNER' && user.ownedCompany) {
-            req.companyId = user.ownedCompany.id;
-            req.company = user.ownedCompany;
-        } else if (user.role === 'COMPANY_ADMIN' && user.companyId) {
-            req.companyId = user.companyId;
-            req.company = user.company;
-        } else {
-            return res.status(403).json({ error: 'User not associated with any company' });
-        }
-
-        next();
-    } catch (error) {
-        console.error('Company scoping error:', error);
-        res.status(500).json({ error: 'Internal server error' });
-    }
-};
-
-router.use(scopeToCompany);
+router.use(authorizeRoles('OWNER', 'COMPANY_ADMIN', 'ADMIN', 'SUPER_ADMIN'));
+router.use(companyMiddleware);
 
 // GET /api/owner/company - Get company profile
 router.get('/company', async (req, res) => {
     try {
-        const company = await prisma.company.findUnique({
+        const company = await prisma.companies.findUnique({
             where: { id: req.companyId },
             include: {
-                owner: {
+                users_companies_ownerIdTousers: {
                     select: {
                         id: true,
                         firstName: true,
@@ -66,7 +33,13 @@ router.get('/company', async (req, res) => {
             return res.status(404).json({ error: 'Company not found' });
         }
 
-        res.json(company);
+        // Transform response for cleaner frontend usage
+        const response = {
+            ...company,
+            owner: company.users_companies_ownerIdTousers || null
+        };
+
+        res.json(response);
     } catch (error) {
         console.error('Error fetching company:', error);
         res.status(500).json({ error: 'Failed to fetch company information' });
@@ -113,7 +86,7 @@ router.put('/company', async (req, res) => {
             dataRetentionDays
         } = req.body;
 
-        const updatedCompany = await prisma.company.update({
+        const updatedCompany = await prisma.companies.update({
             where: { id: req.companyId },
             data: {
                 legalName,
@@ -280,7 +253,7 @@ router.get('/analytics/kpis', async (req, res) => {
         const startDate = new Date(now.getTime() - daysBack * DAY_IN_MS);
 
         const [rides, revenueAggregate, activeDrivers, activeVehicles] = await Promise.all([
-            prisma.ride.findMany({
+            prisma.rides.findMany({
                 where: {
                     companyId: req.companyId,
                     requestedAt: { gte: startDate }
@@ -292,7 +265,7 @@ router.get('/analytics/kpis', async (req, res) => {
                     completedAt: true
                 }
             }),
-            prisma.payment.aggregate({
+            prisma.payments.aggregate({
                 where: {
                     companyId: req.companyId,
                     status: 'COMPLETED',
@@ -307,7 +280,7 @@ router.get('/analytics/kpis', async (req, res) => {
                     isActive: true
                 }
             }),
-            prisma.vehicle.count({
+            prisma.vehicles.count({
                 where: {
                     companyId: req.companyId,
                     isActive: true
@@ -348,7 +321,7 @@ router.get('/analytics/dashboard', async (req, res) => {
         const startDate = new Date(now.getTime() - daysBack * DAY_IN_MS);
 
         const [rides, payments, activeDrivers, activeVehicles] = await Promise.all([
-            prisma.ride.findMany({
+            prisma.rides.findMany({
                 where: {
                     companyId: req.companyId,
                     requestedAt: { gte: startDate }
@@ -360,7 +333,7 @@ router.get('/analytics/dashboard', async (req, res) => {
                     completedAt: true
                 }
             }),
-            prisma.payment.findMany({
+            prisma.payments.findMany({
                 where: {
                     companyId: req.companyId,
                     status: 'COMPLETED',
@@ -378,7 +351,7 @@ router.get('/analytics/dashboard', async (req, res) => {
                     isActive: true
                 }
             }),
-            prisma.vehicle.count({
+            prisma.vehicles.count({
                 where: {
                     companyId: req.companyId,
                     isActive: true

@@ -148,7 +148,7 @@ class QueueManagementService {
     }
 
     async addDriverToZoneQueue(driverId, zoneId) {
-        const zone = await prisma.zone.findUnique({
+        const zone = await prisma.zones.findUnique({
             where: { id: zoneId },
             select: {
                 id: true,
@@ -168,7 +168,7 @@ class QueueManagementService {
 
         if (existingIndex === -1) {
             queue.push(driverId);
-            await prisma.zone.update({
+            await prisma.zones.update({
                 where: { id: zone.id },
                 data: { queue },
             });
@@ -184,7 +184,7 @@ class QueueManagementService {
     }
 
     async ensureDriverRemovedFromZone(driverId, zoneId) {
-        const zone = await prisma.zone.findUnique({
+        const zone = await prisma.zones.findUnique({
             where: { id: zoneId },
             select: {
                 id: true,
@@ -202,7 +202,7 @@ class QueueManagementService {
         const filtered = queue.filter((entry) => entry !== driverId);
 
         if (filtered.length !== queue.length) {
-            await prisma.zone.update({
+            await prisma.zones.update({
                 where: { id: zone.id },
                 data: { queue: filtered },
             });
@@ -218,7 +218,7 @@ class QueueManagementService {
     }
 
     async removeDriverFromAllQueues(driverId, companyId) {
-        const zones = await prisma.zone.findMany({
+        const zones = await prisma.zones.findMany({
             where: companyId
                 ? { companyId }
                 : {
@@ -242,7 +242,7 @@ class QueueManagementService {
             }
 
             const filtered = queue.filter((entry) => entry !== driverId);
-            await prisma.zone.update({
+            await prisma.zones.update({
                 where: { id: zone.id },
                 data: { queue: filtered },
             });
@@ -529,7 +529,7 @@ class QueueManagementService {
         let queuePosition = null;
 
         if (normalizedZoneId) {
-            zone = await prisma.zone.findUnique({
+            zone = await prisma.zones.findUnique({
                 where: { id: normalizedZoneId },
                 select: {
                     id: true,
@@ -682,7 +682,7 @@ class QueueManagementService {
             return [];
         }
 
-        const zones = await prisma.zone.findMany({
+        const zones = await prisma.zones.findMany({
             where: { companyId },
             select: {
                 id: true,

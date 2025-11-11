@@ -86,7 +86,7 @@ router.get('/', async (req, res) => {
                     createdAt: true,
                     updatedAt: true,
                     companyId: true,
-                    company: {
+                    companies_users_companyIdTocompanies: {
                         select: {
                             id: true,
                             legalName: true,
@@ -94,7 +94,7 @@ router.get('/', async (req, res) => {
                             primaryContactEmail: true,
                         }
                     },
-                    companyDriverProfile: {
+                    company_drivers: {
                         select: {
                             id: true,
                             licenseNumber: true,
@@ -114,6 +114,8 @@ router.get('/', async (req, res) => {
         // Add computed status to each user
         const usersWithStatus = users.map(user => ({
             ...user,
+            company: user.companies_users_companyIdTocompanies || null,
+            companyDriverProfile: user.company_drivers?.[0] || null,
             status: getUserStatus(user)
         }));
 
@@ -156,7 +158,7 @@ router.get('/:id', async (req, res) => {
                 updatedAt: true,
                 lastLoginAt: true,
                 companyId: true,
-                company: {
+                companies_users_companyIdTocompanies: {
                     select: {
                         id: true,
                         name: true,
@@ -207,14 +209,14 @@ router.get('/:id', async (req, res) => {
 
         if (user.role === 'DRIVER') {
             const [rideStats, earningsStats] = await Promise.all([
-                prisma.ride.count({
+                prisma.rides.count({
                     where: {
                         driverId: id,
                         status: 'COMPLETED',
                         completedAt: { gte: thirtyDaysAgo },
                     }
                 }),
-                prisma.ride.aggregate({
+                prisma.rides.aggregate({
                     where: {
                         driverId: id,
                         status: 'COMPLETED',
@@ -231,13 +233,13 @@ router.get('/:id', async (req, res) => {
             };
         } else if (user.role === 'PASSENGER') {
             const [rideStats, spendingStats] = await Promise.all([
-                prisma.ride.count({
+                prisma.rides.count({
                     where: {
                         passengerId: id,
                         createdAt: { gte: thirtyDaysAgo },
                     }
                 }),
-                prisma.ride.aggregate({
+                prisma.rides.aggregate({
                     where: {
                         passengerId: id,
                         status: 'COMPLETED',
@@ -254,13 +256,13 @@ router.get('/:id', async (req, res) => {
             };
         } else if (user.role === 'OWNER') {
             const [companyRides, companyRevenue] = await Promise.all([
-                prisma.ride.count({
+                prisma.rides.count({
                     where: {
                         companyId: user.companyId,
                         createdAt: { gte: thirtyDaysAgo },
                     }
                 }),
-                prisma.ride.aggregate({
+                prisma.rides.aggregate({
                     where: {
                         companyId: user.companyId,
                         status: 'COMPLETED',
@@ -278,9 +280,11 @@ router.get('/:id', async (req, res) => {
 
         const userWithStats = {
             ...user,
+            company: user.companies_users_companyIdTocompanies,
             stats,
             status: getUserStatus(user)
         };
+        delete userWithStats.companies_users_companyIdTocompanies;
 
         res.json(userWithStats);
     } catch (error) {
@@ -338,7 +342,7 @@ router.post('/', async (req, res) => {
 
         // Validate companyId if provided
         if (companyId && companyId.trim() !== '') {
-            const company = await prisma.company.findUnique({
+            const company = await prisma.companies.findUnique({
                 where: { id: companyId }
             });
 
@@ -409,7 +413,7 @@ router.post('/', async (req, res) => {
                 avatar: true,
                 address: true,
                 preferences: true,
-                company: {
+                companies_users_companyIdTocompanies: {
                     select: {
                         id: true,
                         name: true,
@@ -442,9 +446,15 @@ router.post('/', async (req, res) => {
             }
         }
 
+        const responseUser = {
+            ...user,
+            company: user.companies_users_companyIdTocompanies
+        };
+        delete responseUser.companies_users_companyIdTocompanies;
+
         res.status(201).json({
             message: 'User created successfully',
-            user: user
+            user: responseUser
         });
     } catch (error) {
         console.error('Error creating user:', error);
@@ -548,7 +558,7 @@ router.put('/:id', async (req, res) => {
                 createdAt: true,
                 companyId: true,
                 deletedAt: true,
-                company: {
+                companies_users_companyIdTocompanies: {
                     select: {
                         id: true,
                         name: true,
@@ -560,8 +570,10 @@ router.put('/:id', async (req, res) => {
 
         const responseUser = {
             ...user,
+            company: user.companies_users_companyIdTocompanies,
             status: getUserStatus(user)
         };
+        delete responseUser.companies_users_companyIdTocompanies;
 
         res.json({
             message: 'User updated successfully',
@@ -646,7 +658,7 @@ router.delete('/:id', async (req, res) => {
         const { id } = req.params;
 
         // Check if user has active operations
-        const activeRides = await prisma.ride.count({
+        const activeRides = await prisma.rides.count({
             where: {
                 OR: [
                     { passengerId: id },

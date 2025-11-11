@@ -84,10 +84,10 @@ const calculateBillingStatus = (company, period) => {
 
 // Helper function to calculate vehicle-based billing
 const calculateBill = (company, period) => {
-    if (!company.subscriptionPlan) return { totalAmount: 0, vehicleCost: 0, commissionAmount: 0 };
+    if (!company.subscription_plans) return { totalAmount: 0, vehicleCost: 0, commissionAmount: 0 };
 
-    const vehicleCount = company.vehicles?.length || 0;
-    const plan = company.subscriptionPlan;
+    const vehicleCount = company.company_vehicles?.length || 0;
+    const plan = company.subscription_plans;
 
     // Base plan cost
     let baseCost = plan.price;
@@ -126,22 +126,22 @@ router.get('/companies', async (req, res) => {
     try {
         const { period = 'current_month' } = req.query;
 
-        const companies = await prisma.company.findMany({
+        const companies = await prisma.companies.findMany({
             where: {
                 name: {
                     not: null
                 }
             },
             include: {
-                subscriptionPlan: true,
-                vehicles: {
+                subscription_plans: true,
+                company_vehicles: {
                     select: {
                         id: true,
-                        licensePlate: true,
-                        isActive: true
+                        registrationNumber: true,
+                        status: true
                     }
                 },
-                companyDrivers: {
+                company_drivers: {
                     select: {
                         id: true,
                         userId: true,
@@ -150,8 +150,8 @@ router.get('/companies', async (req, res) => {
                 },
                 _count: {
                     select: {
-                        vehicles: true,
-                        companyDrivers: true,
+                        company_vehicles: true,
+                        company_drivers: true,
                         rides: true
                     }
                 }
@@ -191,12 +191,12 @@ router.get('/stats', async (req, res) => {
     try {
         const { period = 'current_month' } = req.query;
 
-        const companies = await prisma.company.findMany({
+        const companies = await prisma.companies.findMany({
             include: {
-                subscriptionPlan: true,
+                subscription_plans: true,
                 _count: {
                     select: {
-                        vehicles: true
+                        company_vehicles: true
                     }
                 }
             }
@@ -208,7 +208,7 @@ router.get('/stats', async (req, res) => {
         let overduePayments = 0;
 
         companies.forEach(company => {
-            if (company.subscriptionPlan && company.status === 'active') {
+            if (company.subscription_plans && company.status === 'active') {
                 activeSubscriptions++;
 
                 const billing = calculateBill(company, period);
@@ -238,16 +238,16 @@ router.get('/companies/:id/details', async (req, res) => {
         const { id } = req.params;
         const { period = 'current_month' } = req.query;
 
-        const company = await prisma.company.findUnique({
+        const company = await prisma.companies.findUnique({
             where: { id: id },
             include: {
-                subscriptionPlan: true,
-                vehicles: true,
-                companyDrivers: true,
+                subscription_plans: true,
+                company_vehicles: true,
+                company_drivers: true,
                 _count: {
                     select: {
-                        vehicles: true,
-                        companyDrivers: true,
+                        company_vehicles: true,
+                        company_drivers: true,
                         rides: true
                     }
                 }
@@ -298,10 +298,10 @@ router.post('/companies/:id/invoice', async (req, res) => {
         const { id } = req.params;
         const { period = 'current_month' } = req.body;
 
-        const company = await prisma.company.findUnique({
+        const company = await prisma.companies.findUnique({
             where: { id: id },
             include: {
-                subscriptionPlan: true
+                subscription_plans: true
             }
         });
 
@@ -367,7 +367,7 @@ router.post('/companies/:id/reminder', async (req, res) => {
     try {
         const { id } = req.params;
 
-        const company = await prisma.company.findUnique({
+        const company = await prisma.companies.findUnique({
             where: { id: id }
         });
 
@@ -399,7 +399,7 @@ router.patch('/companies/:id/suspend', async (req, res) => {
     try {
         const { id } = req.params;
 
-        const company = await prisma.company.update({
+        const company = await prisma.companies.update({
             where: { id: id },
             data: {
                 status: 'suspended',
@@ -437,7 +437,7 @@ router.patch('/companies/:id/reactivate', async (req, res) => {
     try {
         const { id } = req.params;
 
-        const company = await prisma.company.update({
+        const company = await prisma.companies.update({
             where: { id: id },
             data: {
                 status: 'active',
@@ -477,7 +477,7 @@ router.put('/companies/:id/subscription', async (req, res) => {
         }
 
         // Verify the subscription plan exists
-        const plan = await prisma.subscriptionPlan.findUnique({
+        const plan = await prisma.subscription_plans.findUnique({
             where: { id: parseInt(subscriptionPlanId) },
             select: { id: true, name: true, isActive: true }
         });
@@ -490,7 +490,7 @@ router.put('/companies/:id/subscription', async (req, res) => {
             return res.status(400).json({ message: 'Cannot assign inactive subscription plan' });
         }
 
-        const company = await prisma.company.update({
+        const company = await prisma.companies.update({
             where: { id: id },
             data: {
                 subscriptionPlanId: parseInt(subscriptionPlanId),
@@ -498,7 +498,7 @@ router.put('/companies/:id/subscription', async (req, res) => {
                 subscriptionUpdatedBy: req.admin.id
             },
             include: {
-                subscriptionPlan: true
+                subscription_plans: true
             }
         });
 
@@ -507,7 +507,7 @@ router.put('/companies/:id/subscription', async (req, res) => {
             company: {
                 id: company.id,
                 name: company.name,
-                subscriptionPlan: company.subscriptionPlan,
+                subscription_plans: company.subscription_plans,
                 subscriptionUpdatedAt: company.subscriptionUpdatedAt
             }
         });
@@ -566,7 +566,7 @@ router.post('/companies/:id/manual-payment', async (req, res) => {
             return res.status(400).json({ message: 'Amount and payment method are required' });
         }
 
-        const company = await prisma.company.findUnique({
+        const company = await prisma.companies.findUnique({
             where: { id: id },
             select: { id: true, name: true, email: true }
         });
@@ -617,18 +617,18 @@ router.get('/reports', async (req, res) => {
 
         // Build where clause based on filters
         const whereClause = {};
-        if (planId) whereClause.subscriptionPlanId = parseInt(planId);
+        if (planId) whereClause.subscription_plansId = parseInt(planId);
         if (companyId) whereClause.id = parseInt(companyId);
         if (status) whereClause.status = status;
 
-        const companies = await prisma.company.findMany({
+        const companies = await prisma.companies.findMany({
             where: whereClause,
             include: {
-                subscriptionPlan: true,
+                subscription_plans: true,
                 _count: {
                     select: {
-                        vehicles: true,
-                        companyDrivers: true,
+                        company_vehicles: true,
+                        company_drivers: true,
                         rides: true
                     }
                 }
@@ -642,7 +642,7 @@ router.get('/reports', async (req, res) => {
             return {
                 companyId: company.id,
                 companyName: company.name,
-                planName: company.subscriptionPlan?.name || 'No Plan',
+                planName: company.subscription_plans?.name || 'No Plan',
                 vehicleCount: company._count.vehicles,
                 driverCount: company._count.companyDrivers,
                 ridesCount: company._count.rides,

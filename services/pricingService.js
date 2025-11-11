@@ -1,5 +1,4 @@
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const prisma = require('../lib/prisma');
 
 class PricingService {
 
@@ -305,7 +304,7 @@ class PricingService {
           }
         },
         include: {
-          locationUpdates: {
+          location_updates: {
             orderBy: { createdAt: 'desc' },
             take: 1
           }
@@ -314,9 +313,9 @@ class PricingService {
 
       // Filter by distance
       const nearbyDrivers = activeDrivers.filter(driver => {
-        if (!driver.locationUpdates[0]) return false;
+        if (!driver.location_updates[0]) return false;
 
-        const lastLocation = driver.locationUpdates[0];
+        const lastLocation = driver.location_updates[0];
         const driverLat = Number(lastLocation.latitude);
         const driverLng = Number(lastLocation.longitude);
 

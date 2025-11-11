@@ -1,6 +1,11 @@
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 
+const JOB_RELATIONS_INCLUDE = {
+  users_jobs_customerIdTousers: true,
+  users_jobs_assignedDriverIdTousers: true,
+};
+
 class TrackingService {
   constructor(io) {
     this.io = io; // Socket.io instance
@@ -79,10 +84,6 @@ class TrackingService {
           status: {
             in: ['ASSIGNED', 'ACCEPTED', 'STARTED', 'IN_PROGRESS']
           }
-        },
-        include: {
-          customer: true,
-          assignedDriver: true,
         }
       });
 
@@ -200,8 +201,7 @@ class TrackingService {
       if (!jobId) return;
 
       const job = await prisma.job.findUnique({
-        where: { id: jobId },
-        include: { trip: true }
+        where: { id: jobId }
       });
 
       if (!job) return;
@@ -244,16 +244,17 @@ class TrackingService {
       // Send notification to customer
       const job = await prisma.job.findUnique({
         where: { id: jobId },
-        include: { customer: true, assignedDriver: true }
+        include: JOB_RELATIONS_INCLUDE
       });
+      const assignedDriver = job?.users_jobs_assignedDriverIdTousers;
 
-      if (job && job.customerId && job.assignedDriver) {
+      if (job && job.customerId && assignedDriver) {
         await prisma.notification.create({
           data: {
             userId: job.customerId,
             type: 'SYSTEM_ALERT',
             title: 'Driver Arrived',
-            message: `${job.assignedDriver.firstName} has arrived at your pickup location`,
+            message: `${assignedDriver.firstName} has arrived at your pickup location`,
             jobId: jobId,
             companyId: job.companyId,
             createdAt: new Date(),
@@ -267,8 +268,8 @@ class TrackingService {
           driverId: driverId,
           location: 'pickup',
           driver: {
-            name: `${job.assignedDriver.firstName} ${job.assignedDriver.lastName}`,
-            phone: job.assignedDriver.phone,
+            name: `${assignedDriver.firstName} ${assignedDriver.lastName}`,
+            phone: assignedDriver.phone,
           }
         });
       }
@@ -282,10 +283,11 @@ class TrackingService {
     try {
       const job = await prisma.job.findUnique({
         where: { id: jobId },
-        include: { customer: true, assignedDriver: true }
+        include: JOB_RELATIONS_INCLUDE
       });
+      const assignedDriver = job?.users_jobs_assignedDriverIdTousers;
 
-      if (job && job.customerId && job.assignedDriver) {
+      if (job && job.customerId && assignedDriver) {
         // Send real-time notification
         const customerRoom = `customer_${job.customerId}`;
         this.io.to(customerRoom).emit('driverArrived', {
@@ -293,8 +295,8 @@ class TrackingService {
           driverId: driverId,
           location: 'dropoff',
           driver: {
-            name: `${job.assignedDriver.firstName} ${job.assignedDriver.lastName}`,
-            phone: job.assignedDriver.phone,
+            name: `${assignedDriver.firstName} ${assignedDriver.lastName}`,
+            phone: assignedDriver.phone,
           }
         });
       }
@@ -428,15 +430,13 @@ class TrackingService {
     try {
       const job = await prisma.job.findUnique({
         where: { id: jobId },
-        include: {
-          customer: true,
-          assignedDriver: true,
-        }
+        include: JOB_RELATIONS_INCLUDE
       });
 
       if (!job || !job.assignedDriverId) {
         throw new Error('Job not found or not assigned');
       }
+      const assignedDriver = job?.users_jobs_assignedDriverIdTousers;
 
       // Create tracking session rooms
       const customerRoom = `customer_${job.customerId}`;
@@ -461,10 +461,10 @@ class TrackingService {
       this.io.to(customerRoom).emit('trackingStarted', {
         jobId: jobId,
         driver: {
-          id: job.assignedDriver?.id,
-          name: job.assignedDriver ? `${job.assignedDriver.firstName} ${job.assignedDriver.lastName}` : null,
-          phone: job.assignedDriver?.phone,
-          vehicle: job.assignedDriver?.vehicleNumber,
+          id: assignedDriver?.id,
+          name: assignedDriver ? `${assignedDriver.firstName} ${assignedDriver.lastName}` : null,
+          phone: assignedDriver?.phone,
+          vehicle: assignedDriver?.vehicleNumber,
         },
         pickup: {
           latitude: job.pickupLatitude,

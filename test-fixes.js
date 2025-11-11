@@ -21,7 +21,7 @@ async function testFixes() {
         console.log('  ✓ Offer model exists');
 
         // Test Assignment model
-        const assignmentCount = await prisma.assignment.findMany({ take: 1 });
+        const assignmentCount = await prisma.assignments.findMany({ take: 1 });
         console.log('  ✓ Assignment model exists');
 
         // Test 2: Check if Job model has required fields
@@ -60,7 +60,7 @@ async function testFixes() {
         // Test 4: Check Assignment model fields
         console.log('\n✅ Test 4: Testing Assignment model fields...');
 
-        const assignmentStructure = await prisma.assignment.findFirst({
+        const assignmentStructure = await prisma.assignments.findFirst({
             select: {
                 jobId: true,
                 driverId: true,

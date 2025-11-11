@@ -171,7 +171,7 @@ app.post('/api/job/:jobId/offer', async (req, res) => {
     });
 
     // Create assignment
-    const assignment = await prisma.assignment.create({
+    const assignment = await prisma.assignments.create({
       data: {
         jobId: job.id,
         driverId: testDriver.id,
@@ -327,7 +327,7 @@ app.delete('/api/jobs/cleanup', async (req, res) => {
 
     if (jobIds.length > 0) {
       // Delete assignments
-      await prisma.assignment.deleteMany({
+      await prisma.assignments.deleteMany({
         where: { jobId: { in: jobIds } }
       });
 

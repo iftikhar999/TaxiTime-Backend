@@ -6,17 +6,19 @@ const { encrypt, decrypt } = require('../lib/crypto');
 const {
   clearCompanyStripeCache,
 } = require('../services/companyStripeService');
+const { companyMiddleware } = require('../middleware/company');
 
 router.use(authenticateToken);
-router.use(authorizeRoles('OWNER', 'ADMIN', 'COMPANY_ADMIN'));
+router.use(authorizeRoles('OWNER', 'ADMIN', 'COMPANY_ADMIN', 'SUPER_ADMIN'));
+router.use(companyMiddleware);
 
 const sanitizeKey = (key) => (key || '').trim();
 
 router.get('/stripe', async (req, res) => {
   try {
-    const { companyId } = req.user;
+    const companyId = req.companyId;
 
-    const settings = await prisma.companySettings.findUnique({
+    const settings = await prisma.company_settings.findUnique({
       where: { companyId },
       select: {
         stripePublicKey: true,
@@ -57,7 +59,7 @@ router.get('/stripe', async (req, res) => {
 
 router.put('/stripe', async (req, res) => {
   try {
-    const { companyId } = req.user;
+    const companyId = req.companyId;
     const { publicKey, secretKey } = req.body || {};
 
     const sanitizedPublicKey = sanitizeKey(publicKey);
@@ -84,7 +86,7 @@ router.put('/stripe', async (req, res) => {
       });
     }
 
-    const settings = await prisma.companySettings.upsert({
+    const settings = await prisma.company_settings.upsert({
       where: { companyId },
       update: {
         stripePublicKey: encrypt(sanitizedPublicKey),
@@ -123,9 +125,9 @@ router.put('/stripe', async (req, res) => {
 
 router.delete('/stripe', async (req, res) => {
   try {
-    const { companyId } = req.user;
+    const companyId = req.companyId;
 
-    await prisma.companySettings.update({
+    await prisma.company_settings.update({
       where: { companyId },
       data: {
         stripePublicKey: null,

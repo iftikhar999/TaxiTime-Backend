@@ -1,43 +1,15 @@
 const express = require('express');
-const { PrismaClient } = require('@prisma/client');
+const { v4: uuidv4 } = require('uuid');
+const prisma = require('../lib/prisma');
 const { authenticateToken, authorizeRoles } = require('../middleware/auth');
+const { companyMiddleware } = require('../middleware/company');
 
-const prisma = new PrismaClient();
+
 const router = express.Router();
 
 router.use(authenticateToken);
-router.use(authorizeRoles('OWNER', 'COMPANY_ADMIN'));
-
-const scopeToCompany = async (req, res, next) => {
-    try {
-        const user = await prisma.user.findUnique({
-            where: { id: req.user.id },
-            include: {
-                ownedCompany: true,
-                company: true
-            }
-        });
-
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-
-        if (user.role === 'OWNER' && user.ownedCompany) {
-            req.companyId = user.ownedCompany.id;
-        } else if (user.role === 'COMPANY_ADMIN' && user.companyId) {
-            req.companyId = user.companyId;
-        } else {
-            return res.status(403).json({ error: 'User not associated with a company' });
-        }
-
-        next();
-    } catch (error) {
-        console.error('Company scope error:', error);
-        res.status(500).json({ error: 'Internal server error' });
-    }
-};
-
-router.use(scopeToCompany);
+router.use(authorizeRoles('OWNER', 'COMPANY_ADMIN', 'ADMIN', 'SUPER_ADMIN'));
+router.use(companyMiddleware);
 
 const parseFloatOrNull = (value) => {
     if (value === undefined || value === null || value === '') {
@@ -50,7 +22,7 @@ const parseFloatOrNull = (value) => {
 // GET /api/owner/tariffs
 router.get('/', async (req, res) => {
     try {
-        const tariffs = await prisma.companyTariff.findMany({
+        const tariffs = await prisma.company_tariffs.findMany({
             where: { companyId: req.companyId },
             include: {
                 zone: {
@@ -113,7 +85,7 @@ router.post('/', async (req, res) => {
 
         // Validate zone belongs to company
         if (zoneId) {
-            const zone = await prisma.companyZone.findFirst({
+            const zone = await prisma.company_zones.findFirst({
                 where: { id: zoneId, companyId: req.companyId }
             });
             if (!zone) {
@@ -121,8 +93,9 @@ router.post('/', async (req, res) => {
             }
         }
 
-        const tariff = await prisma.companyTariff.create({
+        const tariff = await prisma.company_tariffs.create({
             data: {
+                id: uuidv4(),
                 companyId: req.companyId,
                 name: name || null,
                 description: description || null,
@@ -148,11 +121,12 @@ router.post('/', async (req, res) => {
                 nightEnd: nightEnd || null,
                 taxRate: parseFloatOrNull(taxRate) ?? 0,
                 currency,
-                priority: parseInt(priority),
+                priority: parseInt(priority, 10),
                 isActive: Boolean(isActive),
                 promoStackRulesJson: promoStackRulesJson ? (typeof promoStackRulesJson === 'string' ? JSON.parse(promoStackRulesJson) : promoStackRulesJson) : undefined,
                 validFrom: validFrom ? new Date(validFrom) : undefined,
-                validTo: validTo ? new Date(validTo) : undefined
+                validTo: validTo ? new Date(validTo) : undefined,
+                updatedAt: new Date()
             }
         });
 
@@ -192,7 +166,7 @@ router.post('/bulk', async (req, res) => {
 
                 // Validate zone if provided
                 if (tariffData.zoneId) {
-                    const zone = await prisma.companyZone.findFirst({
+                    const zone = await prisma.company_zones.findFirst({
                         where: { id: tariffData.zoneId, companyId: req.companyId }
                     });
                     if (!zone) {
@@ -201,8 +175,9 @@ router.post('/bulk', async (req, res) => {
                     }
                 }
 
-                const tariff = await prisma.companyTariff.create({
+                const tariff = await prisma.company_tariffs.create({
                     data: {
+                        id: uuidv4(),
                         companyId: req.companyId,
                         name: tariffData.name || null,
                         description: tariffData.description || null,
@@ -228,11 +203,12 @@ router.post('/bulk', async (req, res) => {
                         nightEnd: tariffData.nightEnd || null,
                         taxRate: parseFloatOrNull(tariffData.taxRate) ?? 0,
                         currency: tariffData.currency || 'USD',
-                        priority: parseInt(tariffData.priority || 0),
+                        priority: parseInt(tariffData.priority || 0, 10),
                         isActive: Boolean(tariffData.isActive !== false),
                         promoStackRulesJson: tariffData.promoStackRulesJson || undefined,
                         validFrom: tariffData.validFrom ? new Date(tariffData.validFrom) : undefined,
-                        validTo: tariffData.validTo ? new Date(tariffData.validTo) : undefined
+                        validTo: tariffData.validTo ? new Date(tariffData.validTo) : undefined,
+                        updatedAt: new Date()
                     }
                 });
 
@@ -263,7 +239,7 @@ router.post('/bulk', async (req, res) => {
 router.put('/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const existing = await prisma.companyTariff.findFirst({
+        const existing = await prisma.company_tariffs.findFirst({
             where: { id, companyId: req.companyId }
         });
 
@@ -291,7 +267,7 @@ router.put('/:id', async (req, res) => {
         } = req.body;
 
         if (zoneId) {
-            const zone = await prisma.companyZone.findFirst({
+            const zone = await prisma.company_zones.findFirst({
                 where: { id: zoneId, companyId: req.companyId }
             });
             if (!zone) {
@@ -299,7 +275,7 @@ router.put('/:id', async (req, res) => {
             }
         }
 
-        const tariff = await prisma.companyTariff.update({
+        const tariff = await prisma.company_tariffs.update({
             where: { id },
             data: {
                 serviceMode,
@@ -317,7 +293,8 @@ router.put('/:id', async (req, res) => {
                 currency,
                 promoStackRulesJson: promoStackRulesJson ? (typeof promoStackRulesJson === 'string' ? JSON.parse(promoStackRulesJson) : promoStackRulesJson) : undefined,
                 validFrom: validFrom ? new Date(validFrom) : undefined,
-                validTo: validTo ? new Date(validTo) : undefined
+                validTo: validTo ? new Date(validTo) : undefined,
+                updatedAt: new Date()
             }
         });
 
@@ -335,7 +312,7 @@ router.put('/:id', async (req, res) => {
 router.delete('/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const existing = await prisma.companyTariff.findFirst({
+        const existing = await prisma.company_tariffs.findFirst({
             where: { id, companyId: req.companyId }
         });
 
@@ -343,7 +320,7 @@ router.delete('/:id', async (req, res) => {
             return res.status(404).json({ error: 'Tariff not found' });
         }
 
-        await prisma.companyTariff.delete({ where: { id } });
+        await prisma.company_tariffs.delete({ where: { id } });
 
         res.json({ message: 'Tariff deleted successfully' });
     } catch (error) {

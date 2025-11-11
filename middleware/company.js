@@ -1,6 +1,14 @@
-const { PrismaClient } = require('@prisma/client');
+const prisma = require('../lib/prisma');
 
-const prisma = new PrismaClient();
+const pickCompanyRelation = (relation) => {
+    if (!relation) {
+        return null;
+    }
+    if (Array.isArray(relation)) {
+        return relation[0] || null;
+    }
+    return relation;
+};
 
 /**
  * Middleware to fetch and validate company context
@@ -21,8 +29,8 @@ const companyMiddleware = async (req, res, next) => {
         const user = await prisma.user.findUnique({
             where: { id: userId },
             include: {
-                ownedCompany: true,
-                company: true
+                companies_companies_ownerIdTousers: true,
+                companies_users_companyIdTocompanies: true
             }
         });
 
@@ -32,17 +40,42 @@ const companyMiddleware = async (req, res, next) => {
             });
         }
 
+        const ownerCompany = pickCompanyRelation(user.companies_companies_ownerIdTousers);
+        const relatedCompany = pickCompanyRelation(user.companies_users_companyIdTocompanies);
+
+        const resolveSuperAdminCompany = async () => {
+            const requestedCompanyId =
+                req.headers['x-company-id'] ||
+                req.query.companyId ||
+                req.params?.companyId ||
+                req.body?.companyId;
+
+            if (requestedCompanyId) {
+                const company = await prisma.companies.findUnique({
+                    where: { id: requestedCompanyId }
+                });
+                if (company) {
+                    return company;
+                }
+            }
+
+            return prisma.companies.findFirst();
+        };
+
         // Determine the user's company
         let userCompany = null;
 
-        if (user.ownedCompany) {
+        if (user.role === 'OWNER' && ownerCompany) {
             // User is a company owner
-            userCompany = user.ownedCompany;
+            userCompany = ownerCompany;
             req.userRole = 'owner';
-        } else if (user.company) {
-            // User is a company employee (driver, dispatcher, etc.)
-            userCompany = user.company;
+        } else if (relatedCompany) {
+            // User is a company employee (driver, dispatcher, admin, etc.)
+            userCompany = relatedCompany;
             req.userRole = user.role?.toLowerCase() || 'employee';
+        } else if (user.role === 'SUPER_ADMIN') {
+            userCompany = await resolveSuperAdminCompany();
+            req.userRole = 'super_admin';
         }
 
         if (!userCompany) {
@@ -51,10 +84,12 @@ const companyMiddleware = async (req, res, next) => {
             });
         }
 
-        // Check if company is active
-        if (!userCompany.isActive || userCompany.status !== 'ACTIVE') {
+        const companyStatus = (userCompany.status || '').toUpperCase();
+
+        // Allow owners/admins to proceed unless the account is explicitly suspended
+        if (companyStatus === 'SUSPENDED') {
             return res.status(403).json({
-                message: 'Company account is inactive or suspended'
+                message: 'Company account is suspended. Please contact support.'
             });
         }
 
@@ -131,16 +166,25 @@ const checkSubscriptionLimits = (limitType) => {
     return async (req, res, next) => {
         try {
             const company = req.company;
+            const planId = company.subscriptionPlanId ?? null;
 
-            if (!company.subscriptionPlanId) {
+            if (planId === null || planId === undefined) {
                 return res.status(403).json({
                     message: 'No active subscription plan. Please upgrade your account.'
                 });
             }
 
+            const numericPlanId = Number(planId);
+
+            if (Number.isNaN(numericPlanId)) {
+                return res.status(403).json({
+                    message: 'Invalid subscription plan configuration. Please contact support.'
+                });
+            }
+
             // Fetch subscription plan with limits
-            const subscriptionPlan = await prisma.subscriptionPlan.findUnique({
-                where: { id: company.subscriptionPlanId }
+            const subscriptionPlan = await prisma.subscription_plans.findUnique({
+                where: { id: numericPlanId }
             });
 
             if (!subscriptionPlan || !subscriptionPlan.isActive) {
@@ -153,7 +197,7 @@ const checkSubscriptionLimits = (limitType) => {
             switch (limitType) {
                 case 'vehicle':
                     if (subscriptionPlan.vehicleLimit !== -1) {
-                        const vehicleCount = await prisma.vehicle.count({
+                        const vehicleCount = await prisma.vehicles.count({
                             where: { companyId: company.id }
                         });
 

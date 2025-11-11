@@ -149,7 +149,7 @@ router.post('/record', authenticateToken, async (req, res) => {
     } = req.body;
 
     // Create payment record
-    const payment = await prisma.payment.create({
+    const payment = await prisma.payments.create({
       data: {
         jobId,
         amount: parseFloat(amount),
@@ -213,7 +213,7 @@ router.get('/history', authenticateToken, async (req, res) => {
   try {
     const { limit = 50, offset = 0 } = req.query;
 
-    const payments = await prisma.payment.findMany({
+    const payments = await prisma.payments.findMany({
       where: {
         job: {
           driverId: req.user.id

@@ -13,25 +13,27 @@ const router = express.Router();
 const prisma = require('../lib/prisma');
 const { authenticateToken, authorizeRoles } = require('../middleware/auth');
 const { encrypt, decrypt } = require('../lib/crypto');
+const { companyMiddleware } = require('../middleware/company');
 
 router.use(authenticateToken);
-router.use(authorizeRoles('OWNER', 'ADMIN', 'COMPANY_ADMIN'));
+router.use(authorizeRoles('OWNER', 'ADMIN', 'COMPANY_ADMIN', 'SUPER_ADMIN'));
+router.use(companyMiddleware);
 
 // ═══════════════════════════════════════════════════════════
 // GET /api/owner/map-settings - Get company map settings
 // ═══════════════════════════════════════════════════════════
 router.get('/', async (req, res) => {
     try {
-        const { companyId } = req.user;
+        const companyId = req.companyId;
 
         // Get or create settings
-        let settings = await prisma.companySettings.findUnique({
+        let settings = await prisma.company_settings.findUnique({
             where: { companyId }
         });
 
         if (!settings) {
             // Create default settings
-            settings = await prisma.companySettings.create({
+            settings = await prisma.company_settings.create({
                 data: {
                     companyId,
                     mapProvider: 'OPENSTREETMAP',
@@ -74,7 +76,7 @@ router.get('/', async (req, res) => {
 // ═══════════════════════════════════════════════════════════
 router.put('/', async (req, res) => {
     try {
-        const { companyId } = req.user;
+        const companyId = req.companyId;
         const {
             mapProvider,
             googleMapsApiKey,
@@ -115,7 +117,7 @@ router.put('/', async (req, res) => {
         }
 
         // Update or create settings
-        const settings = await prisma.companySettings.upsert({
+        const settings = await prisma.company_settings.upsert({
             where: { companyId },
             update: updateData,
             create: {
@@ -160,7 +162,7 @@ router.put('/', async (req, res) => {
 // ═══════════════════════════════════════════════════════════
 router.put('/provider', async (req, res) => {
     try {
-        const { companyId } = req.user;
+        const companyId = req.companyId;
         const { provider } = req.body;
 
         if (!provider || !['GOOGLE_MAPS', 'OPENSTREETMAP'].includes(provider)) {
@@ -172,7 +174,7 @@ router.put('/provider', async (req, res) => {
 
         // If switching to Google Maps, ensure API key exists
         if (provider === 'GOOGLE_MAPS') {
-            const settings = await prisma.companySettings.findUnique({
+            const settings = await prisma.company_settings.findUnique({
                 where: { companyId }
             });
 
@@ -184,7 +186,7 @@ router.put('/provider', async (req, res) => {
             }
         }
 
-        const updated = await prisma.companySettings.upsert({
+        const updated = await prisma.company_settings.upsert({
             where: { companyId },
             update: { mapProvider: provider },
             create: {
@@ -280,9 +282,9 @@ router.post('/test-api-key', async (req, res) => {
 // ═══════════════════════════════════════════════════════════
 router.get('/api-key', async (req, res) => {
     try {
-        const { companyId } = req.user;
+        const companyId = req.companyId;
 
-        const settings = await prisma.companySettings.findUnique({
+        const settings = await prisma.company_settings.findUnique({
             where: { companyId }
         });
 
@@ -319,10 +321,10 @@ router.get('/api-key', async (req, res) => {
 // ═══════════════════════════════════════════════════════════
 router.delete('/api-key', async (req, res) => {
     try {
-        const { companyId } = req.user;
+        const companyId = req.companyId;
 
         // Check if using Google Maps
-        const settings = await prisma.companySettings.findUnique({
+        const settings = await prisma.company_settings.findUnique({
             where: { companyId }
         });
 
@@ -334,7 +336,7 @@ router.delete('/api-key', async (req, res) => {
         }
 
         // Remove API key
-        await prisma.companySettings.update({
+        await prisma.company_settings.update({
             where: { companyId },
             data: { googleMapsApiKey: null }
         });

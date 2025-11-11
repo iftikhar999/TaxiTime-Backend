@@ -1,7 +1,7 @@
 const express = require('express');
+const { randomUUID } = require('crypto');
 const prisma = require('../../../lib/prisma');
 const { authenticateToken } = require('../../../middleware/auth');
-const { cacheMiddleware } = require('../../../middleware/requestCache');
 const jobService = require('../../../services/jobService');
 const { detectZone, pointInPolygon } = require('../../../services/zoneDetectionService');
 
@@ -30,6 +30,11 @@ const parseJson = (value) => {
     }
 };
 
+const filterUndefined = (object = {}) =>
+    Object.fromEntries(
+        Object.entries(object).filter(([, value]) => value !== undefined)
+    );
+
 const buildLocationSummary = (rawLocation) => {
     const location = parseJson(rawLocation);
     const latitude =
@@ -46,6 +51,238 @@ const buildLocationSummary = (rawLocation) => {
             null,
         latitude,
         longitude,
+    };
+};
+
+const toFiniteNumber = (value, fallback = null) => {
+    if (value === null || value === undefined || value === '') {
+        return fallback;
+    }
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : fallback;
+};
+
+const toNumberSafe = (value, fallback = 0) =>
+    value === null || value === undefined ? fallback : Number(value);
+
+const toOptionalNumberValue = (value) => {
+    if (value === null || value === undefined || value === '') {
+        return null;
+    }
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : null;
+};
+
+const sanitizeLocationPayload = (rawLocation) => {
+    if (!rawLocation || typeof rawLocation !== 'object') {
+        return null;
+    }
+
+    const latitude = toFiniteNumber(rawLocation.latitude ?? rawLocation.lat);
+    const longitude = toFiniteNumber(rawLocation.longitude ?? rawLocation.lng);
+
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+        return null;
+    }
+
+    const accuracy = toFiniteNumber(rawLocation.accuracy);
+    const heading = toFiniteNumber(rawLocation.heading);
+    const speed = toFiniteNumber(rawLocation.speed);
+    const timestampValue = rawLocation.timestamp && new Date(rawLocation.timestamp);
+    const recordedAt =
+        timestampValue && !Number.isNaN(timestampValue.getTime())
+            ? timestampValue.toISOString()
+            : new Date().toISOString();
+
+    return {
+        latitude,
+        longitude,
+        accuracy: Number.isFinite(accuracy) ? accuracy : null,
+        heading: Number.isFinite(heading) ? heading : null,
+        speed: Number.isFinite(speed) ? speed : null,
+        address:
+            typeof rawLocation.address === 'string' && rawLocation.address.trim().length
+                ? rawLocation.address.trim()
+                : null,
+        timestamp: recordedAt,
+    };
+};
+
+const sanitizeBreakdownPayload = (raw = null) => {
+    if (!raw || typeof raw !== 'object') {
+        return {
+            raw: null,
+            metrics: {},
+            pricing: null,
+        };
+    }
+
+    const metricsSource = raw.metrics || raw.rideMetrics || {};
+    const totalDistanceMeters =
+        toFiniteNumber(raw.totalDistanceMeters) ??
+        toFiniteNumber(raw.distanceMeters) ??
+        toFiniteNumber(raw.totalDistance) ??
+        toFiniteNumber(metricsSource.distanceMeters);
+    const totalDurationSeconds =
+        toFiniteNumber(raw.totalDurationSeconds) ??
+        toFiniteNumber(raw.durationSeconds) ??
+        toFiniteNumber(raw.duration) ??
+        toFiniteNumber(raw.totalDuration) ??
+        toFiniteNumber(metricsSource.elapsedSeconds);
+    const waitingSeconds =
+        toFiniteNumber(raw.waitingSeconds) ??
+        toFiniteNumber(metricsSource.waitingSeconds);
+
+    const pricing =
+        raw.pricing && typeof raw.pricing === 'object'
+            ? filterUndefined({
+                  startingPrice: toFiniteNumber(raw.pricing.startingPrice),
+                  distanceCost: toFiniteNumber(raw.pricing.distanceCost),
+                  durationCost: toFiniteNumber(raw.pricing.durationCost),
+                  waitingCost: toFiniteNumber(raw.pricing.waitingCost),
+                  totalCost: toFiniteNumber(raw.pricing.totalCost),
+              })
+            : null;
+
+    const metricsPayload = filterUndefined({
+        totalDistanceMeters,
+        totalDistanceKm:
+            totalDistanceMeters !== null && totalDistanceMeters !== undefined
+                ? Number((totalDistanceMeters / 1000).toFixed(3))
+                : undefined,
+        totalDurationSeconds,
+        totalDurationMinutes:
+            totalDurationSeconds !== null && totalDurationSeconds !== undefined
+                ? Math.max(Math.round(totalDurationSeconds / 60), 1)
+                : undefined,
+        waitingSeconds,
+    });
+
+    return {
+        raw,
+        metrics: metricsPayload,
+        pricing,
+    };
+};
+
+const mergeRequirementPayload = (existing, updates = {}) => {
+    const base = typeof existing === 'object' && existing !== null ? { ...existing } : {};
+    let changed = false;
+
+    if (updates.rideMetrics && Object.keys(updates.rideMetrics).length) {
+        base.rideMetrics = {
+            ...(base.rideMetrics || {}),
+            ...updates.rideMetrics,
+        };
+        changed = true;
+    }
+
+    if (updates.pauseRecords && Array.isArray(updates.pauseRecords)) {
+        base.pauseRecords = updates.pauseRecords;
+        changed = true;
+    }
+
+    if (updates.statusTimeline && typeof updates.statusTimeline === 'object') {
+        base.statusTimeline = {
+            ...(base.statusTimeline || {}),
+            ...updates.statusTimeline,
+        };
+        changed = true;
+    }
+
+    return changed ? base : null;
+};
+
+const RECENT_JOB_STATUS_FILTER = ['COMPLETED', 'FINISHED'];
+
+const mapJobToRecentSummary = (job) => {
+    const customer = job.users_jobs_customerIdTousers;
+    const ride = job.rides;
+    const payment = job.payments?.[0] || null;
+    const requirementPayload = parseJson(job.requirements);
+    const rideMetrics = requirementPayload?.rideMetrics || {};
+    const statusTimeline = requirementPayload?.statusTimeline || null;
+    const completionDate = job.completedAt ?? ride?.completedAt ?? job.updatedAt;
+    const ridePickup = ride?.pickup ? buildLocationSummary(ride.pickup) : null;
+    const rideDropoff = ride?.destination ? buildLocationSummary(ride.destination) : null;
+
+    let distanceKm =
+        toOptionalNumberValue(job.actualDistanceKm) ??
+        toOptionalNumberValue(ride?.actualDistance) ??
+        toOptionalNumberValue(rideMetrics.totalDistanceKm);
+    if (
+        (distanceKm === null || distanceKm === undefined) &&
+        rideMetrics.totalDistanceMeters !== undefined
+    ) {
+        const metersValue = toOptionalNumberValue(rideMetrics.totalDistanceMeters);
+        if (metersValue !== null && metersValue !== undefined) {
+            distanceKm = metersValue / 1000;
+        }
+    }
+
+    let durationSeconds = toOptionalNumberValue(job.actualDurationSeconds);
+    if (durationSeconds === null || durationSeconds === undefined) {
+        const rideDurationMinutes = toOptionalNumberValue(ride?.actualDuration ?? job.estimatedDuration);
+        if (rideDurationMinutes !== null && rideDurationMinutes !== undefined) {
+            durationSeconds = Math.max(Math.round(rideDurationMinutes * 60), 0);
+        }
+    }
+    if (durationSeconds === null || durationSeconds === undefined) {
+        const metricsDurationSeconds = toOptionalNumberValue(rideMetrics.totalDurationSeconds);
+        if (metricsDurationSeconds !== null && metricsDurationSeconds !== undefined) {
+            durationSeconds = Math.max(Math.round(metricsDurationSeconds), 0);
+        }
+    }
+
+    const fareActual = toNumberSafe(
+        job.actualFare ?? ride?.actualFare ?? payment?.amount ?? job.estimatedPrice,
+    );
+    const driverEarnings = fareActual;
+
+    return {
+        id: job.id,
+        jobId: job.jobId,
+        status: job.status,
+        createdAt: job.createdAt ? job.createdAt.toISOString() : null,
+        startedAt: job.startedAt ? job.startedAt.toISOString() : statusTimeline?.STARTED || null,
+        completedAt: completionDate ? new Date(completionDate).toISOString() : null,
+        pickup: {
+            address: ridePickup?.address || job.pickupAddress || 'Pickup pending',
+            latitude: ridePickup?.latitude ?? job.pickupLatitude,
+            longitude: ridePickup?.longitude ?? job.pickupLongitude,
+        },
+        dropoff: {
+            address: rideDropoff?.address || job.dropoffAddress || 'Destination pending',
+            latitude: rideDropoff?.latitude ?? job.dropoffLatitude,
+            longitude: rideDropoff?.longitude ?? job.dropoffLongitude,
+        },
+        distanceKm: typeof distanceKm === 'number' ? Number(distanceKm.toFixed(2)) : null,
+        durationSeconds: durationSeconds ?? null,
+        fare: {
+            currency: 'NZD',
+            total: Number(fareActual.toFixed(2)),
+            driverEarnings: Number(driverEarnings.toFixed(2)),
+        },
+        paymentMethod: job.paymentMethod ?? payment?.paymentMethod ?? 'UNKNOWN',
+        payment: payment
+            ? {
+                  amount: Number(toNumberSafe(payment.amount).toFixed(2)),
+                  driverEarnings: Number(driverEarnings.toFixed(2)),
+                  status: payment.status,
+              }
+            : null,
+        passenger: customer
+            ? {
+                  id: customer.id,
+                  name:
+                      `${customer.firstName || ''} ${customer.lastName || ''}`.trim() ||
+                      customer.email ||
+                      customer.phone ||
+                      'Customer',
+                  phone: customer.phone || null,
+              }
+            : null,
+        statusTimeline,
     };
 };
 
@@ -75,7 +312,7 @@ router.get('/current', authenticateToken, async (req, res) => {
                 },
             },
             include: {
-                customer: {
+                users_jobs_customerIdTousers: {
                     select: {
                         id: true,
                         firstName: true,
@@ -84,7 +321,12 @@ router.get('/current', authenticateToken, async (req, res) => {
                         phone: true,
                     },
                 },
-                trip: true,
+                rides: {
+                    select: {
+                        id: true,
+                        status: true,
+                    },
+                },
             },
             orderBy: {
                 updatedAt: 'desc',
@@ -102,6 +344,9 @@ router.get('/current', authenticateToken, async (req, res) => {
         console.log(`✅ Found active job for driver: ${job.id}, status: ${job.status}`);
 
         // Build response
+        const customer = job.users_jobs_customerIdTousers;
+        const trip = job.rides;
+
         const jobResponse = {
             id: job.id,
             jobId: job.jobId,
@@ -116,14 +361,14 @@ router.get('/current', authenticateToken, async (req, res) => {
             estimatedFare: job.estimatedPrice, // Alias
             actualFare: job.actualFare,
             createdAt: job.createdAt,
-            customer: job.customer ? {
-                id: job.customer.id,
-                name: `${job.customer.firstName || ''} ${job.customer.lastName || ''}`.trim() || job.customer.email,
-                phone: job.customer.phone,
+            customer: customer ? {
+                id: customer.id,
+                name: `${customer.firstName || ''} ${customer.lastName || ''}`.trim() || customer.email,
+                phone: customer.phone,
             } : null,
-            trip: job.trip ? {
-                id: job.trip.id,
-                status: job.trip.status,
+            trip: trip ? {
+                id: trip.id,
+                status: trip.status,
             } : null,
         };
 
@@ -215,43 +460,66 @@ const normaliseZonePolygons = (rawBoundaries) => {
         return [];
     }
 
+    const rawPolygons = [];
+    const pushPolygon = (coords) => {
+        if (!Array.isArray(coords) || coords.length < 3) {
+            return;
+        }
+        rawPolygons.push(coords);
+    };
+
     if (boundaries.type === 'Polygon' && Array.isArray(boundaries.coordinates)) {
-        return [boundaries.coordinates[0]];
+        pushPolygon(boundaries.coordinates[0]);
+    } else if (boundaries.type === 'MultiPolygon' && Array.isArray(boundaries.coordinates)) {
+        boundaries.coordinates.forEach((poly) => pushPolygon(poly?.[0]));
+    } else if (Array.isArray(boundaries.coordinates)) {
+        pushPolygon(boundaries.coordinates);
+    } else if (Array.isArray(boundaries)) {
+        pushPolygon(boundaries);
+    } else if (boundaries.coordinates && Array.isArray(boundaries.coordinates)) {
+        pushPolygon(boundaries.coordinates);
     }
 
-    if (boundaries.type === 'MultiPolygon' && Array.isArray(boundaries.coordinates)) {
-        return boundaries.coordinates
-            .map((poly) => poly?.[0])
-            .filter(Boolean);
-    }
-
-    if (Array.isArray(boundaries.coordinates)) {
-        const coords = boundaries.coordinates;
-        const first = coords[0];
-        if (Array.isArray(first) && first.length >= 2 && typeof first[0] === 'number') {
-            return [coords];
+    const normalizePoint = (coord) => {
+        if (!coord) {
+            return null;
         }
-    }
 
-    if (Array.isArray(boundaries)) {
-        const first = boundaries[0];
-        if (Array.isArray(first) && first.length >= 2 && typeof first[0] === 'number') {
-            return [boundaries];
+        if (Array.isArray(coord)) {
+            const [lng, lat] = coord;
+            if (Number.isFinite(lat) && Number.isFinite(lng)) {
+                return { lat, lng };
+            }
+            return null;
         }
-        if (first && typeof first === 'object' && first.lat !== undefined && first.lng !== undefined) {
-            return [boundaries.map((coord) => [coord.lng, coord.lat])];
-        }
-    }
 
-    if (boundaries.coordinates && Array.isArray(boundaries.coordinates)) {
-        const coords = boundaries.coordinates;
-        const first = coords[0];
-        if (first && typeof first === 'object' && first.lat !== undefined && first.lng !== undefined) {
-            return [coords.map((coord) => [coord.lng, coord.lat])];
-        }
-    }
+        if (typeof coord === 'object') {
+            const lat = toNumber(
+                coord.lat ??
+                    coord.latitude ??
+                    (Array.isArray(coord.coordinates) ? coord.coordinates[1] : undefined)
+            );
+            const lng = toNumber(
+                coord.lng ??
+                    coord.longitude ??
+                    (Array.isArray(coord.coordinates) ? coord.coordinates[0] : undefined)
+            );
 
-    return [];
+            if (Number.isFinite(lat) && Number.isFinite(lng)) {
+                return { lat, lng };
+            }
+        }
+
+        return null;
+    };
+
+    return rawPolygons
+        .map((polygon) =>
+            polygon
+                .map(normalizePoint)
+                .filter((point) => point && Number.isFinite(point.lat) && Number.isFinite(point.lng))
+        )
+        .filter((polygon) => polygon.length >= 3);
 };
 
 const RIDE_STATUS_ALLOWLIST = new Set([
@@ -291,108 +559,225 @@ router.get('/history', authenticateToken, async (req, res) => {
     const parsedLimit = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 50);
     const parsedPage = Math.max(parseInt(page, 10) || 1, 1);
     const skip = (parsedPage - 1) * parsedLimit;
+    const statusFilterValues = String(status || '')
+        .split(',')
+        .map((value) => value.trim())
+        .filter(Boolean)
+        .map((value) => value.replace(/-/g, '_').toUpperCase());
+    const statusFilter = statusFilterValues.length ? { in: statusFilterValues } : undefined;
+    const historyWhereClause = {
+        assignedDriverId: driverId,
+        ...(statusFilter ? { status: statusFilter } : {}),
+    };
 
     try {
         console.log(`📋 [Job History] Request from driver ${driverId}, page ${parsedPage}, limit ${parsedLimit}`);
 
-        // Query completed jobs
-        const jobs = await prisma.job.findMany({
-            where: {
-                assignedDriverId: driverId,
-                status: status,
-                completedAt: {
-                    not: null,
-                },
-            },
-            orderBy: [
-                { completedAt: 'desc' },
-                { updatedAt: 'desc' },
-            ],
-            skip,
-            take: parsedLimit,
-            include: {
-                customer: {
-                    select: {
-                        id: true,
-                        firstName: true,
-                        lastName: true,
-                        email: true,
-                        phone: true,
+        // Query completed jobs with safe error handling
+        const [jobs, totalCount] = await Promise.all([
+            prisma.job.findMany({
+                where: historyWhereClause,
+                orderBy: [
+                    { completedAt: 'desc' },
+                    { updatedAt: 'desc' },
+                    { createdAt: 'desc' },
+                ],
+                skip,
+                take: parsedLimit,
+                include: {
+                    users_jobs_customerIdTousers: {
+                        select: {
+                            id: true,
+                            firstName: true,
+                            lastName: true,
+                            email: true,
+                            phone: true,
+                        },
                     },
-                },
-                trip: {
-                    select: {
-                        id: true,
-                        status: true,
-                        actualFare: true,
-                        actualDistance: true,
-                        actualDuration: true,
-                        Payment: {
-                            where: {
-                                status: {
-                                    in: ['COMPLETED', 'PAID'],
+                    rides: {
+                        select: {
+                            id: true,
+                            actualDistance: true,
+                            actualDuration: true,
+                            actualFare: true,
+                            completedAt: true,
+                            payments: {
+                                where: {
+                                    status: {
+                                        in: ['COMPLETED', 'PAID'],
+                                    },
                                 },
+                                select: {
+                                    amount: true,
+                                    driverEarnings: true,
+                                    paymentMethod: true,
+                                    status: true,
+                                },
+                                orderBy: { createdAt: 'desc' },
+                                take: 1,
                             },
-                            select: {
-                                amount: true,
-                                driverEarnings: true,
-                                paymentMethod: true,
-                            },
-                            take: 1,
                         },
                     },
                 },
-            },
-        });
-
-        // Get total count for pagination
-        const totalCount = await prisma.job.count({
-            where: {
-                assignedDriverId: driverId,
-                status: status,
-                completedAt: {
-                    not: null,
-                },
-            },
-        });
-
-        const summaries = jobs.map((job) => {
-            const payment = job.trip?.Payment?.[0];
+            }).catch(err => {
+                console.error('❌ [Job History] Query error:', err);
+                throw new Error('Failed to fetch job history from database');
+            }),
             
-            return {
-                id: job.id,
-                jobId: job.jobId,
-                status: job.status,
-                completedAt: job.completedAt?.toISOString() || job.updatedAt.toISOString(),
-                pickup: {
-                    address: job.pickupAddress,
-                    latitude: job.pickupLatitude,
-                    longitude: job.pickupLongitude,
-                },
-                dropoff: {
-                    address: job.dropoffAddress,
-                    latitude: job.dropoffLatitude,
-                    longitude: job.dropoffLongitude,
-                },
-                distance: job.trip?.actualDistance ?? job.estimatedDistance,
-                duration: job.trip?.actualDuration ?? job.estimatedDuration,
-                fare: {
-                    estimated: job.estimatedPrice,
-                    actual: job.finalAmount ?? job.actualFare ?? job.trip?.actualFare,
-                    driverEarnings: payment?.driverEarnings ?? job.finalAmount ?? job.actualFare,
-                },
-                paymentMethod: job.paymentMethod ?? payment?.paymentMethod,
-                customer: job.customer ? {
-                    id: job.customer.id,
-                    name: `${job.customer.firstName || ''} ${job.customer.lastName || ''}`.trim() || job.customer.email,
-                    phone: job.customer.phone,
-                } : null,
-            };
+            prisma.job.count({
+                where: historyWhereClause,
+            }).catch(err => {
+                console.error('❌ [Job History] Count error:', err);
+                return 0; // Return 0 if count fails
+            })
+        ]);
+
+        console.log(`✅ [Job History] Found ${jobs?.length || 0} jobs, total count: ${totalCount}`);
+
+        const toNumberSafe = (value, fallback = 0) =>
+            value === null || value === undefined ? fallback : Number(value);
+        const toOptionalNumber = (value) => {
+            if (value === null || value === undefined || value === '') {
+                return null;
+            }
+            const numeric = Number(value);
+            return Number.isFinite(numeric) ? numeric : null;
+        };
+
+        const summaries = (jobs || []).map((job) => {
+            try {
+                const customer = job.users_jobs_customerIdTousers;
+                const ride = job.rides;
+                const requirementPayload = parseJson(job.requirements);
+                const rideMetrics = requirementPayload?.rideMetrics || {};
+                const statusTimeline = requirementPayload?.statusTimeline || null;
+                const payment = ride?.payments?.[0] || null;
+                const completionDate = ride?.completedAt ?? job.updatedAt;
+                const jobFinalAmount = toNumberSafe(job.finalAmount);
+                const paymentAmount = toNumberSafe(payment?.amount);
+                const paymentDriverEarnings = toNumberSafe(payment?.driverEarnings);
+                const actualFare = toNumberSafe(
+                    job.actualFare ?? ride?.actualFare ?? job.estimatedPrice,
+                );
+                const collectedAmount =
+                    jobFinalAmount ??
+                    paymentDriverEarnings ??
+                    paymentAmount ??
+                    actualFare ??
+                    0;
+
+                const passenger = customer
+                    ? {
+                        id: customer.id,
+                        name:
+                            `${customer.firstName || ''} ${customer.lastName || ''}`.trim() ||
+                            customer.email ||
+                            customer.phone ||
+                            'Customer',
+                        phone: customer.phone || null,
+                        rating: null,
+                    }
+                    : null;
+
+                const paymentSummary =
+                    collectedAmount
+                        ? {
+                              amount: collectedAmount,
+                              driverEarnings: collectedAmount,
+                              commission: null,
+                              method: job.paymentMethod ?? payment?.paymentMethod ?? 'UNKNOWN',
+                          }
+                        : null;
+                
+                let rawDistance =
+                    toOptionalNumber(job.actualDistanceKm) ??
+                    toOptionalNumber(ride?.actualDistance ?? job.estimatedDistance) ??
+                    toOptionalNumber(rideMetrics.totalDistanceKm);
+                if (
+                    (rawDistance === null || rawDistance === undefined) &&
+                    rideMetrics.totalDistanceMeters !== undefined
+                ) {
+                    const metersValue = toOptionalNumber(rideMetrics.totalDistanceMeters);
+                    if (metersValue !== null && metersValue !== undefined) {
+                        rawDistance = metersValue / 1000;
+                    }
+                }
+
+                let durationSeconds = toOptionalNumber(job.actualDurationSeconds);
+                if (durationSeconds === null || durationSeconds === undefined) {
+                    const rawDurationMinutes = toOptionalNumber(
+                        ride?.actualDuration ?? job.estimatedDuration
+                    );
+                    durationSeconds =
+                        rawDurationMinutes !== null && rawDurationMinutes !== undefined
+                            ? Math.max(Math.round(rawDurationMinutes * 60), 0)
+                            : null;
+                }
+
+                if (durationSeconds === null || durationSeconds === undefined) {
+                    const fallbackSeconds = toOptionalNumber(rideMetrics.totalDurationSeconds);
+                    if (fallbackSeconds !== null && fallbackSeconds !== undefined) {
+                        durationSeconds = Math.max(Math.round(fallbackSeconds), 0);
+                    }
+                }
+
+                return {
+                    id: job.id,
+                    jobId: job.jobId,
+                    status: job.status,
+                    completedAt: completionDate ? new Date(completionDate).toISOString() : null,
+                    pickup: {
+                        address: job.pickupAddress || 'Unknown',
+                        latitude: job.pickupLatitude,
+                        longitude: job.pickupLongitude,
+                    },
+                    dropoff: {
+                        address: job.dropoffAddress || 'Unknown',
+                        latitude: job.dropoffLatitude,
+                        longitude: job.dropoffLongitude,
+                    },
+                    distance:
+                        rawDistance !== null && rawDistance !== undefined
+                            ? Number(rawDistance.toFixed(2))
+                            : null,
+                    duration: durationSeconds,
+                    fare: {
+                        estimated: toNumberSafe(job.estimatedPrice),
+                        actual: actualFare,
+                        driverEarnings: collectedAmount,
+                    },
+                    paymentMethod: job.paymentMethod ?? payment?.paymentMethod ?? 'UNKNOWN',
+                    customer: customer ? {
+                        id: customer.id,
+                        name: `${customer.firstName || ''} ${customer.lastName || ''}`.trim() || customer.email || 'Customer',
+                        phone: customer.phone || null,
+                    } : null,
+                    passenger,
+                    payment: paymentSummary,
+                    createdAt: job.createdAt ? job.createdAt.toISOString() : completionDate ? new Date(completionDate).toISOString() : null,
+                    pickupAddress: job.pickupAddress,
+                    pickupLatitude: job.pickupLatitude,
+                    pickupLongitude: job.pickupLongitude,
+                    dropoffAddress: job.dropoffAddress,
+                    dropoffLatitude: job.dropoffLatitude,
+                    dropoffLongitude: job.dropoffLongitude,
+                    statusTimeline,
+                };
+            } catch (mapError) {
+                console.error(`❌ [Job History] Error mapping job ${job?.id}:`, mapError);
+                return null;
+            }
+        }).filter(Boolean); // Remove any null entries
+
+        const sortedSummaries = summaries.sort((a, b) => {
+            const aTime = new Date(a.completedAt || a.createdAt || 0).getTime();
+            const bTime = new Date(b.completedAt || b.createdAt || 0).getTime();
+            return bTime - aTime;
         });
 
         res.json({
             success: true,
-            data: summaries,
+            data: sortedSummaries,
             pagination: {
                 page: parsedPage,
                 limit: parsedLimit,
@@ -402,11 +787,90 @@ router.get('/history', authenticateToken, async (req, res) => {
             },
         });
     } catch (error) {
-        console.error('❌ [Job History] Failed to fetch:', error);
+        console.error('❌ [Job History] Fatal error:', error);
+        console.error('   Driver ID:', driverId);
+        console.error('   Error details:', error.message);
+        console.error('   Stack:', error.stack);
+        
         res.status(500).json({
             success: false,
-            message: 'Unable to load job history',
-            error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+            message: 'Unable to load job history. Please try again later.',
+            error: process.env.NODE_ENV === 'development' ? {
+                message: error.message,
+                type: error.constructor.name
+            } : undefined,
+        });
+    }
+});
+
+router.get('/recent', authenticateToken, async (req, res) => {
+    const driverId = req.user?.id;
+
+    if (!driverId) {
+        return res.status(401).json({
+            success: false,
+            message: 'Driver authentication required',
+        });
+    }
+
+    const { limit = 3 } = req.query;
+    const parsedLimit = Math.min(Math.max(parseInt(limit, 10) || 3, 1), 10);
+
+    try {
+        const jobs = await prisma.job.findMany({
+            where: {
+                assignedDriverId: driverId,
+                status: { in: RECENT_JOB_STATUS_FILTER },
+                completedAt: { not: null },
+            },
+            orderBy: [
+                { completedAt: { sort: 'desc', nulls: 'last' } },
+                { updatedAt: 'desc' },
+                { createdAt: 'desc' },
+            ],
+            take: parsedLimit,
+            include: {
+                users_jobs_customerIdTousers: {
+                    select: {
+                        id: true,
+                        firstName: true,
+                        lastName: true,
+                        email: true,
+                        phone: true,
+                    },
+                },
+                rides: {
+                    select: {
+                        id: true,
+                        actualDistance: true,
+                        actualDuration: true,
+                        actualFare: true,
+                        completedAt: true,
+                    },
+                },
+                payments: {
+                    where: {
+                        status: {
+                            in: ['COMPLETED', 'PAID'],
+                        },
+                    },
+                    orderBy: { createdAt: 'desc' },
+                    take: 1,
+                },
+            },
+        });
+
+        const summaries = jobs.map(mapJobToRecentSummary);
+
+        res.json({
+            success: true,
+            data: summaries,
+        });
+    } catch (error) {
+        console.error('❌ [Driver Recent Jobs] Fatal error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Unable to load recent jobs. Please try again later.',
         });
     }
 });
@@ -557,8 +1021,8 @@ router.get('/rides/history', authenticateToken, async (req, res) => {
     }
 });
 
-// ✅ OPTIMIZED: Added 10-second cache to reduce load by 95%+
-router.get('/upcoming', authenticateToken, cacheMiddleware(10), async (req, res) => {
+// ✅ Real-time endpoint for upcoming jobs (cache disabled to prevent stale assignments)
+router.get('/upcoming', authenticateToken, async (req, res) => {
     const driverId = req.user?.id;
 
     if (!driverId) {
@@ -573,6 +1037,16 @@ router.get('/upcoming', authenticateToken, cacheMiddleware(10), async (req, res)
         
         // ✅ OPTIMIZATION: Get driver data from auth token to avoid extra DB query
         const driver = req.user;
+        const companyId =
+            driver.companyId ||
+            driver.company?.id ||
+            req.user?.companies_users_companyIdTocompanies?.id ||
+            null;
+
+        if (!companyId) {
+            console.warn(`❌ [/upcoming] Unable to resolve company for driver ${driverId}`);
+            return res.json({ success: true, data: [] });
+        }
         
         // Get zone from query (mobile app should pass this)
         const zoneHint = req.query.zoneId ? String(req.query.zoneId) : null;
@@ -593,7 +1067,7 @@ router.get('/upcoming', authenticateToken, cacheMiddleware(10), async (req, res)
                 const detectedZone = await detectZone(
                     Number(lastLocation.latitude),
                     Number(lastLocation.longitude),
-                    driver.companyId
+                    companyId
                 );
                 if (detectedZone) {
                     currentZoneId = detectedZone.id;
@@ -608,7 +1082,7 @@ router.get('/upcoming', authenticateToken, cacheMiddleware(10), async (req, res)
         }
 
         // ✅ OPTIMIZATION: Get zone boundaries from cache (zoneCacheService)
-        const zoneRecord = await prisma.zone.findUnique({
+        const zoneRecord = await prisma.zones.findUnique({
             where: { id: currentZoneId },
             select: { id: true, name: true, boundaries: true },
         });
@@ -634,7 +1108,7 @@ router.get('/upcoming', authenticateToken, cacheMiddleware(10), async (req, res)
 
         const candidates = await prisma.job.findMany({
             where: {
-                companyId: driver.companyId,
+                companyId,
                 status: { in: ['UNASSIGNED', 'PENDING'] },
                 assignedDriverId: null,
                 pickupLatitude: { not: null },
@@ -642,7 +1116,7 @@ router.get('/upcoming', authenticateToken, cacheMiddleware(10), async (req, res)
                 OR: [{ scheduledAt: null }, { scheduledAt: { lte: soon } }],
             },
             include: {
-                customer: {
+                users_jobs_customerIdTousers: {
                     select: {
                         id: true,
                         firstName: true,
@@ -659,6 +1133,7 @@ router.get('/upcoming', authenticateToken, cacheMiddleware(10), async (req, res)
         });
 
         const filtered = [];
+        const normalizedPolygons = zonePolygons.filter((polygon) => polygon.length >= 3);
 
         for (const job of candidates) {
             const lat = Number(job.pickupLatitude);
@@ -668,8 +1143,12 @@ router.get('/upcoming', authenticateToken, cacheMiddleware(10), async (req, res)
                 continue;
             }
 
-            const matchesZone = zonePolygons.some((polygon) =>
-                pointInPolygon(lat, lng, polygon)
+            if (!normalizedPolygons.length) {
+                continue;
+            }
+
+            const matchesZone = normalizedPolygons.some((polygon) =>
+                pointInPolygon({ lat, lng }, polygon)
             );
 
             if (!matchesZone) {
@@ -681,6 +1160,7 @@ router.get('/upcoming', authenticateToken, cacheMiddleware(10), async (req, res)
             const minutesToPickup = scheduledAt
                 ? Math.round((scheduledAt.getTime() - now.getTime()) / 60000)
                 : 0;
+            const jobCustomer = job.users_jobs_customerIdTousers;
 
             filtered.push({
                 id: job.id,
@@ -702,12 +1182,12 @@ router.get('/upcoming', authenticateToken, cacheMiddleware(10), async (req, res)
                 estimatedDuration: job.estimatedDuration,
                 isLate,
                 minutesToPickup,
-                customer: job.customer
+                customer: jobCustomer
                     ? {
-                          id: job.customer.id,
-                          firstName: job.customer.firstName,
-                          lastName: job.customer.lastName,
-                          phone: job.customer.phone,
+                          id: jobCustomer.id,
+                          firstName: jobCustomer.firstName,
+                          lastName: jobCustomer.lastName,
+                          phone: jobCustomer.phone,
                       }
                     : null,
                 zone: { id: zoneRecord.id, name: zoneRecord.name || currentZoneName },
@@ -783,6 +1263,7 @@ router.post('/payment', authenticateToken, async (req, res) => {
         adjustmentReason = '',
         breakdown = null,
         pauseRecords = null,
+        dropoffLocation = null,
     } = req.body;
 
     console.log('💰 [PAYMENT COLLECTION] Request received', { 
@@ -800,20 +1281,73 @@ router.post('/payment', authenticateToken, async (req, res) => {
         });
     }
 
-    if (!jobId || !amount || !paymentMethod) {
+    const normalizedMethod = String(paymentMethod || '').trim().toUpperCase();
+    const amountValue = toFiniteNumber(amount);
+
+    if (!jobId || !amountValue || amountValue <= 0 || !normalizedMethod) {
         return res.status(400).json({
             success: false,
             message: 'Missing required payment information',
         });
     }
 
+    const numericBaseFare = toFiniteNumber(baseFare, 0) || 0;
+    const numericExtra = toFiniteNumber(extraAmount, 0) || 0;
+    const numericDiscount = toFiniteNumber(discountAmount, 0) || 0;
+    const breakdownInfo = sanitizeBreakdownPayload(breakdown);
+    const dropoffLocationPayload = sanitizeLocationPayload(dropoffLocation);
+    const pauseRecordsArray =
+        Array.isArray(pauseRecords) && pauseRecords.length ? pauseRecords : null;
+    const completedDate = collectedAt ? new Date(collectedAt) : new Date();
+    const metricDistanceKm = toFiniteNumber(breakdownInfo.metrics.totalDistanceKm);
+    const metricDurationSeconds = toFiniteNumber(
+        breakdownInfo.metrics.totalDurationSeconds,
+    );
+    const metricDurationMinutes =
+        toFiniteNumber(breakdownInfo.metrics.totalDurationMinutes) ??
+        (Number.isFinite(metricDurationSeconds)
+            ? Math.max(Math.round(metricDurationSeconds / 60), 1)
+            : null);
+
+    console.log('🧮 [PAYMENT COLLECTION] Meter payload summary', {
+        jobId,
+        distanceKm: metricDistanceKm,
+        durationSeconds: metricDurationSeconds,
+        hasDropoffLocation: Boolean(dropoffLocationPayload),
+    });
+
     try {
         // Verify job exists and belongs to this driver
         const job = await prisma.job.findUnique({
             where: { id: jobId },
-            include: { 
-                trip: true,
-                company: true,
+            include: {
+                rides: {
+                    select: {
+                        id: true,
+                        actualFare: true,
+                        payments: {
+                            where: {
+                                status: {
+                                    in: ['COMPLETED', 'PAID'],
+                                },
+                            },
+                            select: {
+                                amount: true,
+                                driverEarnings: true,
+                                paymentMethod: true,
+                                status: true,
+                                createdAt: true,
+                            },
+                            orderBy: { createdAt: 'desc' },
+                            take: 1,
+                        },
+                    },
+                },
+                companies: {
+                    select: {
+                        commissionRate: true,
+                    },
+                },
             },
         });
 
@@ -835,52 +1369,134 @@ router.post('/payment', authenticateToken, async (req, res) => {
         const currentShift = await prisma.shift.findFirst({
             where: {
                 driverId,
-                status: { in: ['ONLINE', 'ON_TRIP', 'BREAK'] },
+                status: { in: ['ONLINE', 'BUSY', 'BREAK'] },
                 endTime: null,
             },
             orderBy: { startTime: 'desc' },
         });
 
         // Calculate commission (e.g., 20% for company)
-        const companyCommissionRate = job.company?.commissionRate || 0.20;
-        const companyCommission = amount * companyCommissionRate;
-        const driverEarnings = amount - companyCommission;
+        const rawCommissionRate = job.companies?.commissionRate;
+        const commissionRate =
+            rawCommissionRate === undefined || rawCommissionRate === null
+                ? 0.2
+                : rawCommissionRate > 1
+                ? rawCommissionRate / 100
+                : rawCommissionRate;
+        const companyCommission = Number((amountValue * commissionRate).toFixed(2));
+        const driverEarnings = Math.max(Number((amountValue - companyCommission).toFixed(2)), 0);
 
         // Create payment record
-        const payment = await prisma.payment.create({
+        const payment = await prisma.payments.create({
             data: {
+                id: randomUUID(),
                 jobId,
                 tripId: job.tripId,
                 customerId: customerId || job.customerId,
                 driverId,
                 companyId: job.companyId,
-                amount: amount,
+                amount: amountValue,
                 currency: 'NZD',
-                paymentMethod: paymentMethod.toUpperCase(),
+                paymentMethod: normalizedMethod,
                 status: status || 'COMPLETED',
-                paidAt: collectedAt ? new Date(collectedAt) : new Date(),
+                paidAt: completedDate,
+                createdAt: new Date(),
+                updatedAt: new Date(),
                 fees: companyCommission,
                 driverEarnings,
+                metadata: breakdownInfo.raw || undefined,
             },
         });
 
-        // Update job with actual fare
+        const requirementPayload = mergeRequirementPayload(job.requirements, {
+            rideMetrics: Object.keys(breakdownInfo.metrics || {}).length
+                ? {
+                      ...breakdownInfo.metrics,
+                      pricing: breakdownInfo.pricing || undefined,
+                  }
+                : breakdownInfo.pricing
+                ? { pricing: breakdownInfo.pricing }
+                : {},
+            pauseRecords: pauseRecordsArray,
+            statusTimeline: {
+                COMPLETED: completedDate.toISOString(),
+                FINISHED: completedDate.toISOString(),
+            },
+        });
+
+        const jobUpdateData = {
+            actualFare: amountValue,
+            finalAmount: amountValue,
+            paymentMethod: normalizedMethod,
+            completedAt: completedDate,
+            actualDistanceKm: Number.isFinite(metricDistanceKm) ? metricDistanceKm : undefined,
+            actualDurationSeconds: Number.isFinite(metricDurationSeconds)
+                ? Math.max(Math.round(metricDurationSeconds), 0)
+                : undefined,
+        };
+
+        if (dropoffLocationPayload) {
+            jobUpdateData.dropoffLatitude = dropoffLocationPayload.latitude;
+            jobUpdateData.dropoffLongitude = dropoffLocationPayload.longitude;
+            if (dropoffLocationPayload.address) {
+                jobUpdateData.dropoffAddress = dropoffLocationPayload.address;
+            }
+        }
+
+        if (requirementPayload) {
+            jobUpdateData.requirements = requirementPayload;
+        }
+
         await prisma.job.update({
             where: { id: jobId },
-            data: { 
-                actualFare: amount,
-                paymentMethod: paymentMethod.toUpperCase(),
-            },
+            data: jobUpdateData,
         });
 
         // If there's a trip record, update it too
         if (job.tripId) {
-            await prisma.ride.update({
+            const fareBreakdownPayload =
+                breakdownInfo.raw ||
+                (breakdownInfo.pricing || Object.keys(breakdownInfo.metrics || {}).length
+                    ? {
+                          pricing: breakdownInfo.pricing,
+                          metrics: breakdownInfo.metrics,
+                      }
+                    : null);
+
+            const destinationPayload = dropoffLocationPayload
+                ? {
+                      address:
+                          dropoffLocationPayload.address ||
+                          job.dropoffAddress ||
+                          'Recorded dropoff',
+                      latitude: dropoffLocationPayload.latitude,
+                      longitude: dropoffLocationPayload.longitude,
+                      recordedAt: dropoffLocationPayload.timestamp,
+                  }
+                : null;
+
+            await prisma.rides.update({
                 where: { id: job.tripId },
                 data: {
-                    actualFare: amount,
-                    paymentMethod: paymentMethod.toUpperCase(),
+                    actualFare: amountValue,
+                    paymentMethod: normalizedMethod,
                     paymentStatus: 'PAID',
+                    completedAt: completedDate,
+                    actualDistance: Number.isFinite(metricDistanceKm) ? metricDistanceKm : undefined,
+                    actualDuration: Number.isFinite(metricDurationMinutes)
+                        ? metricDurationMinutes
+                        : undefined,
+                    fareBreakdown: fareBreakdownPayload || undefined,
+                    ...(destinationPayload
+                        ? {
+                              destination: {
+                                  address: destinationPayload.address,
+                                  latitude: destinationPayload.latitude,
+                                  longitude: destinationPayload.longitude,
+                                  recordedAt: destinationPayload.recordedAt,
+                              },
+                          }
+                        : {}),
                 },
             });
         }
@@ -896,30 +1512,33 @@ router.post('/payment', authenticateToken, async (req, res) => {
                     jobId,
                     paymentId: payment.id,
                     shiftId: currentShift?.id,
-                    amount,
+                    amount: amountValue,
                     currency: 'NZD',
-                    paymentMethod: paymentMethod.toUpperCase(),
-                    earnedAt: collectedAt ? new Date(collectedAt) : new Date(),
-                    baseFare: Number.parseFloat(baseFare) || 0,
-                    distanceFare: breakdown?.distanceCost || 0,
-                    timeFare: breakdown?.timeCost || 0,
-                    waitingFare: breakdown?.waitingCost || 0,
-                    extraAmount: Number.parseFloat(extraAmount) || 0,
-                    discountAmount: Number.parseFloat(discountAmount) || 0,
-                    totalAmount: amount,
+                    paymentMethod: normalizedMethod,
+                    earnedAt: completedDate,
+                    baseFare: numericBaseFare,
+                    distanceFare: breakdownInfo.pricing?.distanceCost || 0,
+                    timeFare: breakdownInfo.pricing?.durationCost || 0,
+                    waitingFare: breakdownInfo.pricing?.waitingCost || 0,
+                    extraAmount: numericExtra,
+                    discountAmount: numericDiscount,
+                    totalAmount: amountValue,
                     companyCommission,
                     driverEarnings,
                     commissionRate: companyCommissionRate,
                     totalMobility,
                     adjustmentReason: adjustmentReason || null,
                     isAdjustment: !!adjustmentReason,
-                    tripDistance: breakdown?.totalDistance || job.estimatedDistance,
-                    tripDuration: breakdown?.totalTime ? Math.floor(breakdown.totalTime / 60) : null,
+                    tripDistance:
+                        breakdownInfo.metrics.totalDistanceKm ?? job.estimatedDistance,
+                    tripDuration:
+                        breakdownInfo.metrics.totalDurationMinutes ??
+                        (job.estimatedDuration ?? null),
                     pickupAddress: job.pickupAddress,
                     dropoffAddress: job.dropoffAddress,
                     customerName: null, // Could fetch from customer if needed
                     metadata: {
-                        breakdown,
+                        breakdown: breakdownInfo.raw,
                         pauseRecords,
                     },
                 });
@@ -933,20 +1552,30 @@ router.post('/payment', authenticateToken, async (req, res) => {
 
         console.log('✅ [PAYMENT COLLECTION] Payment recorded successfully', {
             paymentId: payment.id,
-            amount,
+            amount: amountValue,
             driverEarnings,
             companyCommission,
+        });
+
+        console.log('🧾 [PAYMENT COLLECTION] Persisted completion metrics', {
+            jobId,
+            actualDistanceKm: jobUpdateData.actualDistanceKm ?? metricDistanceKm ?? null,
+            actualDurationSeconds:
+                jobUpdateData.actualDurationSeconds ??
+                (Number.isFinite(metricDurationSeconds) ? metricDurationSeconds : null),
+            dropoffLocation: dropoffLocationPayload || null,
         });
 
         res.json({
             success: true,
             data: {
                 paymentId: payment.id,
-                amount,
+                amount: amountValue,
                 driverEarnings,
                 companyCommission,
-                paymentMethod,
+                paymentMethod: normalizedMethod,
                 status: payment.status,
+                rideMetrics: breakdownInfo.metrics || undefined,
             },
             message: 'Payment recorded successfully',
         });
@@ -979,7 +1608,7 @@ router.post('/walk-in/create', authenticateToken, async (req, res) => {
         const driver = await prisma.user.findUnique({
             where: { id: driverId },
             include: {
-                company: true,
+                companies_users_companyIdTocompanies: true,
                 shifts: {
                     where: {
                         status: { in: ['ONLINE', 'OFFLINE', 'BUSY', 'BREAK'] }, // ✅ FIX: Valid ShiftStatus enum values
@@ -989,7 +1618,7 @@ router.post('/walk-in/create', authenticateToken, async (req, res) => {
                     },
                     take: 1,
                 },
-                DriverPreferences: true, // ✅ FIX: Include DriverPreferences table (capital D)
+                driver_preferences: true,
             },
         });
 
@@ -997,7 +1626,9 @@ router.post('/walk-in/create', authenticateToken, async (req, res) => {
             return res.status(404).json({ error: 'Driver not found' });
         }
 
-        if (!driver.company) {
+        const driverCompany = driver.companies_users_companyIdTocompanies;
+
+        if (!driverCompany) {
             return res.status(400).json({ error: 'Driver not linked to a company' });
         }
 
@@ -1007,7 +1638,7 @@ router.post('/walk-in/create', authenticateToken, async (req, res) => {
         }
         
         // ✅ FIX: Get vehicle and tariff from DriverPreferences table (not JSON preferences)
-        const driverPrefs = driver.DriverPreferences;
+        const driverPrefs = driver.driver_preferences;
         
         // ✅ CRITICAL FIX: Vehicle and tariff come from DriverPreferences, but may not exist yet
         // For walk-in jobs, we can proceed without them (will be null in ride record)
@@ -1055,21 +1686,19 @@ router.post('/walk-in/create', authenticateToken, async (req, res) => {
         const now = new Date();
         const rideId = `WALKIN-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
         
-        // ✅ FIX: Create BOTH Ride AND Job (like dispatch does)
-        // Use a transaction to ensure both are created together
         const result = await prisma.$transaction(async (tx) => {
-            // 1. Create the Ride (Trip) first - STARTED status
-            const ride = await tx.ride.create({
+            const ride = await tx.rides.create({
                 data: {
-                    rideId: rideId,
-                    passengerId: driverId, // ✅ For walk-in, use driver as temporary passenger
-                    driverId: driverId,
-                    vehicleId: selectedVehicleId || null, // ✅ FIX: Use from preferences
-                    companyId: driver.company.id,
+                    id: randomUUID(),
+                    rideId,
+                    passengerId: driverId,
+                    driverId,
+                    vehicleId: selectedVehicleId || null,
+                    companyId: driverCompany.id,
                     rideType: 'TAXI',
-                    status: 'IN_PROGRESS', // ✅ Started immediately
+                    status: 'IN_PROGRESS',
                     pickup: {
-                        address: pickupAddress, // ✅ Use the address variable we defined
+                        address: pickupAddress,
                         latitude: pickupLatitude,
                         longitude: pickupLongitude,
                     },
@@ -1080,33 +1709,40 @@ router.post('/walk-in/create', authenticateToken, async (req, res) => {
                     },
                     requestedAt: now,
                     acceptedAt: now,
-                    pickedUpAt: now, // ✅ Picked up immediately (walk-in)
+                    pickedUpAt: now,
+                    createdAt: now,
+                    updatedAt: now,
                     estimatedFare: 0,
-                    paymentMethod: 'CASH', // Default to cash
+                    paymentMethod: 'CASH',
                     paymentStatus: 'PENDING',
                     requirements: {
                         isWalkIn: true,
                         createdBy: driverId,
                         createdAt: now.toISOString(),
+                        statusTimeline: {
+                            OFFERED: now.toISOString(),
+                            ACCEPTED: now.toISOString(),
+                            STARTED: now.toISOString(),
+                        },
                     },
-                    tariffId: selectedTariffId || null, // ✅ FIX: Use from preferences
+                    tariffId: selectedTariffId || null,
                 },
             });
 
-            // 2. Create the Job linked to the Ride
             const job = await tx.job.create({
                 data: {
+                    id: randomUUID(),
                     jobId: rideId,
-                    companyId: driver.company.id,
+                    companyId: driverCompany.id,
                     type: 'TAXI',
-                    status: 'STARTED', // ✅ Start immediately
-                    tripId: ride.id, // ✅ CRITICAL: Link to Ride
-                    scheduledAt: null, // ✅ FIX: NULL = "NOW" job (not "LATER")
+                    status: 'STARTED',
+                    tripId: ride.id,
+                    scheduledAt: null,
                     assignedDriverId: driverId,
-                    customerId: driverId, // Temporary - walk-in has no pre-registered customer
-                    pickupAddress: pickupAddress, // ✅ Use the address variable we defined
-                    pickupLatitude: pickupLatitude,
-                    pickupLongitude: pickupLongitude,
+                    customerId: driverId,
+                    pickupAddress,
+                    pickupLatitude,
+                    pickupLongitude,
                     dropoffAddress: 'Destination - To be set',
                     dropoffLatitude: null,
                     dropoffLongitude: null,
@@ -1116,11 +1752,18 @@ router.post('/walk-in/create', authenticateToken, async (req, res) => {
                         isWalkIn: true,
                         createdBy: driverId,
                         createdAt: now.toISOString(),
+                        statusTimeline: {
+                            OFFERED: now.toISOString(),
+                            ACCEPTED: now.toISOString(),
+                            STARTED: now.toISOString(),
+                        },
                     },
+                    createdAt: now,
+                    updatedAt: now,
+                    startedAt: now,
                 },
             });
 
-            // 3. Update driver status to BUSY
             await tx.user.update({
                 where: { id: driverId },
                 data: {
@@ -1135,29 +1778,30 @@ router.post('/walk-in/create', authenticateToken, async (req, res) => {
             return { ride, job };
         });
 
-        console.log(`✅ Walk-in ride created: ${result.ride.id}, job: ${result.job.id}, type: NOW (scheduledAt: null)`);
+        const { ride, job } = result;
+        console.log(`✅ Walk-in ride created: ${ride.id}, job: ${job.id}, type: NOW (scheduledAt: null)`);
 
         // Return the job with full details
         res.json({
             success: true,
             message: 'Walk-in job created and started',
             job: {
-                id: result.job.id,
-                jobId: result.job.jobId,
-                rideId: result.ride.id, // ✅ Include ride ID
-                status: result.job.status,
+                id: job.id,
+                jobId: job.jobId,
+                rideId: ride.id,
+                status: job.status,
                 pickupLocation: {
-                    address: result.job.pickupAddress,
-                    latitude: result.job.pickupLatitude,
-                    longitude: result.job.pickupLongitude,
+                    address: job.pickupAddress,
+                    latitude: job.pickupLatitude,
+                    longitude: job.pickupLongitude,
                 },
                 dropoffLocation: {
-                    address: result.job.dropoffAddress,
-                    latitude: result.job.dropoffLatitude,
-                    longitude: result.job.dropoffLongitude,
+                    address: job.dropoffAddress,
+                    latitude: job.dropoffLatitude,
+                    longitude: job.dropoffLongitude,
                 },
-                estimatedFare: result.job.estimatedPrice || 0,
-                createdAt: result.job.createdAt,
+                estimatedFare: job.estimatedPrice || 0,
+                createdAt: job.createdAt,
                 isWalkIn: true,
                 driver: {
                     id: driver.id,
@@ -1217,10 +1861,10 @@ router.get('/stats/today', authenticateToken, async (req, res) => {
                 actualFare: true,
                 estimatedPrice: true,
                 completedAt: true,
-                trip: {
+                rides: {
                     select: {
                         actualFare: true,
-                        Payment: {
+                        payments: {
                             where: {
                                 status: {
                                     in: ['COMPLETED', 'PAID'],
@@ -1230,6 +1874,7 @@ router.get('/stats/today', authenticateToken, async (req, res) => {
                                 driverEarnings: true,
                                 amount: true,
                             },
+                            orderBy: { createdAt: 'desc' },
                             take: 1,
                         },
                     },
@@ -1239,46 +1884,19 @@ router.get('/stats/today', authenticateToken, async (req, res) => {
 
         console.log(`📊 Found ${todaysJobs.length} completed jobs for today`);
 
-        // ✅ Calculate earnings from actual collected amounts
+        // ✅ Calculate earnings from passenger-facing totals (before commission)
         const totalJobs = todaysJobs.length;
-        let totalEarnings = 0;
-
-        for (const job of todaysJobs) {
-            // Priority 1: finalAmount (what driver actually collected)
-            if (job.finalAmount) {
-                totalEarnings += parseFloat(job.finalAmount);
-                continue;
-            }
-            
-            // Priority 2: Driver earnings from payment record
-            if (job.trip?.Payment?.[0]?.driverEarnings) {
-                totalEarnings += parseFloat(job.trip.Payment[0].driverEarnings);
-                continue;
-            }
-            
-            // Priority 3: Full payment amount
-            if (job.trip?.Payment?.[0]?.amount) {
-                totalEarnings += parseFloat(job.trip.Payment[0].amount);
-                continue;
-            }
-            
-            // Priority 4: Trip's actual fare
-            if (job.trip?.actualFare) {
-                totalEarnings += parseFloat(job.trip.actualFare);
-                continue;
-            }
-            
-            // Priority 5: Job's actual fare
-            if (job.actualFare) {
-                totalEarnings += parseFloat(job.actualFare);
-                continue;
-            }
-            
-            // Priority 6: Fallback to estimated price
-            if (job.estimatedPrice) {
-                totalEarnings += parseFloat(job.estimatedPrice);
-            }
-        }
+        const totalEarnings = todaysJobs.reduce((sum, job) => {
+            const ridePayment = job.rides?.payments?.[0];
+            const passengerTotal =
+                parseFloat(ridePayment?.amount ?? '') ||
+                parseFloat(job.rides?.actualFare ?? '') ||
+                parseFloat(job.actualFare ?? '') ||
+                parseFloat(job.finalAmount ?? '') ||
+                parseFloat(job.estimatedPrice ?? '') ||
+                0;
+            return sum + passengerTotal;
+        }, 0);
 
         console.log(`📊 Total jobs: ${totalJobs}, Total earnings: $${totalEarnings.toFixed(2)}`);
 

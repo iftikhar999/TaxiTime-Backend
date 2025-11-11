@@ -63,7 +63,7 @@ router.post('/register', [
       }
 
       // Verify company exists and is active
-      const company = await prisma.company.findFirst({
+      const company = await prisma.companies.findFirst({
         where: { id: companyId, isActive: true }
       });
 
@@ -151,7 +151,10 @@ router.post('/login', [
     // Find user
     const user = await prisma.user.findUnique({
       where: { email },
-      include: { company: true }
+      include: { 
+        companies_users_companyIdTocompanies: true,
+        companies_companies_ownerIdTousers: true
+      }
     });
 
     if (!user) {
@@ -188,8 +191,9 @@ router.post('/login', [
         role: user.role,
         isActive: user.isActive,
         isVerified: user.isVerified,
-        companyId: user.companyId, // ✅ CRITICAL: Include companyId directly
-        company: user.company
+        companyId: user.companyId,
+        company: user.companies_users_companyIdTocompanies || null,
+        ownedCompany: user.companies_companies_ownerIdTousers || null
       }
     });
 
@@ -210,7 +214,6 @@ router.get('/me', async (req, res) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET || 'uber_clone_secret_love');
     const user = await prisma.user.findUnique({
       where: { id: decoded.userId },
-      include: { company: true },
       select: {
         id: true,
         firstName: true,
@@ -220,7 +223,9 @@ router.get('/me', async (req, res) => {
         role: true,
         isActive: true,
         isVerified: true,
-        company: true,
+        companyId: true,
+        companies_users_companyIdTocompanies: true,
+        companies_companies_ownerIdTousers: true,
         avatar: true,
         address: true,
         preferences: true,
@@ -232,7 +237,16 @@ router.get('/me', async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    res.json({ user });
+    // Map to cleaner response format
+    const responseUser = {
+      ...user,
+      company: user.companies_users_companyIdTocompanies || null,
+      ownedCompany: user.companies_companies_ownerIdTousers || null
+    };
+    delete responseUser.companies_users_companyIdTocompanies;
+    delete responseUser.companies_companies_ownerIdTousers;
+
+    res.json({ user: responseUser });
 
   } catch (error) {
     console.error('Get profile error:', error);
@@ -255,14 +269,15 @@ router.get('/profile', authenticate, async (req, res) => {
         avatar: true,
         preferences: true,
         address: true,
-        company: {
+        companyId: true,
+        companies_users_companyIdTocompanies: {
           select: {
             id: true,
             brandName: true,
             status: true
           }
         },
-        ownedCompany: {
+        companies_companies_ownerIdTousers: {
           select: {
             id: true,
             brandName: true,
@@ -276,7 +291,16 @@ router.get('/profile', authenticate, async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    res.json({ user });
+    // Map to cleaner response format
+    const responseUser = {
+      ...user,
+      company: user.companies_users_companyIdTocompanies || null,
+      ownedCompany: user.companies_companies_ownerIdTousers || null
+    };
+    delete responseUser.companies_users_companyIdTocompanies;
+    delete responseUser.companies_companies_ownerIdTousers;
+
+    res.json({ user: responseUser });
   } catch (error) {
     console.error('Profile fetch error:', error);
     res.status(500).json({ message: 'Failed to fetch profile' });
@@ -406,7 +430,7 @@ router.post('/refresh', async (req, res) => {
 // GET /api/auth/companies - Get active companies for registration (public endpoint)
 router.get('/companies', async (req, res) => {
   try {
-    const companies = await prisma.company.findMany({
+    const companies = await prisma.companies.findMany({
       where: { isActive: true },
       select: {
         id: true,

@@ -11,7 +11,7 @@ router.use(authenticateToken);
 // GET /api/drivers/companies/active - Get list of active companies for driver creation
 router.get('/companies/active', authorizeRoles('SUPER_ADMIN', 'OWNER', 'DISPATCHER'), async (req, res) => {
   try {
-    const companies = await prisma.company.findMany({
+    const companies = await prisma.companies.findMany({
       where: {
         isActive: true,
         isVerified: true,
@@ -126,7 +126,7 @@ router.post('/', authorizeRoles('SUPER_ADMIN', 'OWNER', 'DISPATCHER'), async (re
     }
 
     // Verify company exists and is active
-    const company = await prisma.company.findFirst({
+    const company = await prisma.companies.findFirst({
       where: {
         id: companyId,
         isActive: true,
@@ -633,7 +633,7 @@ router.post('/:id/shift/start', async (req, res) => {
     if (activeShift) {
       let activeVehicle = null;
       try {
-        activeVehicle = await prisma.vehicle.findFirst({
+        activeVehicle = await prisma.vehicles.findFirst({
           where: {
             driverId: id,
             isActive: true
@@ -660,7 +660,7 @@ router.post('/:id/shift/start', async (req, res) => {
     // Verify vehicle if provided and use transaction to prevent race conditions
     let vehicle = null;
     if (vehicleId) {
-      vehicle = await prisma.vehicle.findUnique({
+      vehicle = await prisma.vehicles.findUnique({
         where: { id: vehicleId },
         include: {
           company: true
@@ -822,7 +822,7 @@ router.post('/:id/shift/end', async (req, res) => {
     const durationMinutes = Math.floor((endTime - startTime) / 1000 / 60);
 
     // Get rides for this shift (filter by time range)
-    const rides = await prisma.ride.findMany({
+    const rides = await prisma.rides.findMany({
       where: {
         driverId: id,
         createdAt: {
@@ -913,7 +913,7 @@ router.get('/:id/shift/status', async (req, res) => {
     // Get driver's assigned vehicle
     let vehicle = null;
     try {
-      const driverVehicle = await prisma.vehicle.findFirst({
+      const driverVehicle = await prisma.vehicles.findFirst({
         where: {
           driverId: id,
           isActive: true

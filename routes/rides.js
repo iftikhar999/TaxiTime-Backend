@@ -11,7 +11,7 @@ router.post('/', authenticateToken, async (req, res) => {
   try {
     const { pickup, destination, vehicleType = 'SEDAN', requirements } = req.body;
 
-    const ride = await prisma.ride.create({
+    const ride = await prisma.rides.create({
       data: {
         rideId: `RIDE_${Date.now()}`,
         passengerId: req.user.id,
@@ -66,7 +66,7 @@ router.get('/my-rides', authenticateToken, async (req, res) => {
       whereClause.status = status;
     }
 
-    const rides = await prisma.ride.findMany({
+    const rides = await prisma.rides.findMany({
       where: whereClause,
       include: {
         passenger: {
@@ -91,7 +91,7 @@ router.get('/my-rides', authenticateToken, async (req, res) => {
       skip: (parseInt(page) - 1) * parseInt(limit)
     });
 
-    const total = await prisma.ride.count({ where: whereClause });
+    const total = await prisma.rides.count({ where: whereClause });
 
     res.json({
       success: true,

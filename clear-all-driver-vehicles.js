@@ -58,7 +58,7 @@ async function clearAllDriverVehicles() {
         }
 
         // Clear all vehicle assignments
-        const assignmentsResult = await prisma.assignment.deleteMany({
+        const assignmentsResult = await prisma.assignments.deleteMany({
             where: {
                 driverId: {
                     in: drivers.map(d => d.id)

@@ -6,7 +6,7 @@ const stripeClientCache = new Map();
 const GLOBAL_STRIPE_CONFIG_KEY = 'stripe_global_keys';
 
 async function getGlobalStripeSettings() {
-  const config = await prisma.globalConfiguration.findUnique({
+  const config = await prisma.global_configurations.findUnique({
     where: { key: GLOBAL_STRIPE_CONFIG_KEY },
   });
 
@@ -37,7 +37,7 @@ async function setGlobalStripeSettings({
     },
   };
 
-  await prisma.globalConfiguration.upsert({
+  await prisma.global_configurations.upsert({
     where: { key: GLOBAL_STRIPE_CONFIG_KEY },
     update: {
       value,
@@ -70,7 +70,7 @@ async function setGlobalStripeSettings({
 }
 
 async function deleteGlobalStripeSettings(userId) {
-  await prisma.globalConfiguration.deleteMany({
+  await prisma.global_configurations.deleteMany({
     where: { key: GLOBAL_STRIPE_CONFIG_KEY },
   });
 
@@ -92,7 +92,7 @@ async function getCompanyStripeSettings(companyId) {
     return { publicKey: null, secretKey: null };
   }
 
-  const settings = await prisma.companySettings.findUnique({
+  const settings = await prisma.company_settings.findUnique({
     where: { companyId },
     select: {
       stripePublicKey: true,

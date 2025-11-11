@@ -2,10 +2,11 @@ const express = require('express');
 const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
-const { PrismaClient, CompanyDocumentType } = require('@prisma/client');
+const { CompanyDocumentType } = require('@prisma/client');
+const prisma = require('../lib/prisma');
 const { authenticateToken, authorizeRoles } = require('../middleware/auth');
+const { companyMiddleware } = require('../middleware/company');
 
-const prisma = new PrismaClient();
 const router = express.Router();
 
 const STORAGE_ROOT = process.env.COMPANY_DOCUMENTS_PATH || path.join(__dirname, '..', 'uploads', 'company-documents');
@@ -33,43 +34,13 @@ const upload = multer({
 
 // Restrict to owners and company admins
 router.use(authenticateToken);
-router.use(authorizeRoles('OWNER', 'COMPANY_ADMIN'));
-
-const scopeToCompany = async (req, res, next) => {
-    try {
-        const user = await prisma.user.findUnique({
-            where: { id: req.user.id },
-            include: {
-                ownedCompany: true,
-                company: true
-            }
-        });
-
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-
-        if (user.role === 'OWNER' && user.ownedCompany) {
-            req.companyId = user.ownedCompany.id;
-        } else if (user.role === 'COMPANY_ADMIN' && user.companyId) {
-            req.companyId = user.companyId;
-        } else {
-            return res.status(403).json({ error: 'User not associated with a company' });
-        }
-
-        next();
-    } catch (error) {
-        console.error('Company scope error:', error);
-        res.status(500).json({ error: 'Internal server error' });
-    }
-};
-
-router.use(scopeToCompany);
+router.use(authorizeRoles('OWNER', 'COMPANY_ADMIN', 'ADMIN', 'SUPER_ADMIN'));
+router.use(companyMiddleware);
 
 // GET /api/owner/company/documents - list company documents
 router.get('/', async (req, res) => {
     try {
-        const documents = await prisma.companyDocument.findMany({
+        const documents = await prisma.company_documents.findMany({
             where: { companyId: req.companyId },
             orderBy: { createdAt: 'desc' }
         });
@@ -109,7 +80,7 @@ router.post('/', upload.single('file'), async (req, res) => {
             return res.status(400).json({ error: 'Invalid document type' });
         }
 
-        const document = await prisma.companyDocument.create({
+        const document = await prisma.company_documents.create({
             data: {
                 companyId: req.companyId,
                 type,
@@ -139,7 +110,7 @@ router.delete('/:id', async (req, res) => {
     try {
         const { id } = req.params;
 
-        const document = await prisma.companyDocument.findFirst({
+        const document = await prisma.company_documents.findFirst({
             where: {
                 id,
                 companyId: req.companyId
@@ -159,7 +130,7 @@ router.delete('/:id', async (req, res) => {
             });
         }
 
-        await prisma.companyDocument.delete({ where: { id } });
+        await prisma.company_documents.delete({ where: { id } });
 
         res.json({ message: 'Document deleted successfully' });
     } catch (error) {

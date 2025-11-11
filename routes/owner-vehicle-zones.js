@@ -9,9 +9,11 @@ const express = require('express');
 const router = express.Router();
 const prisma = require('../lib/prisma');
 const { authenticateToken, authorizeRoles } = require('../middleware/auth');
+const { companyMiddleware } = require('../middleware/company');
 
 router.use(authenticateToken);
-router.use(authorizeRoles('OWNER', 'ADMIN', 'COMPANY_ADMIN'));
+router.use(authorizeRoles('OWNER', 'ADMIN', 'COMPANY_ADMIN', 'SUPER_ADMIN'));
+router.use(companyMiddleware);
 
 // ═══════════════════════════════════════════════════════════
 // GET /api/owner/vehicles/:vehicleId/zones - Get zones for vehicle
@@ -19,10 +21,10 @@ router.use(authorizeRoles('OWNER', 'ADMIN', 'COMPANY_ADMIN'));
 router.get('/:vehicleId/zones', async (req, res) => {
     try {
         const { vehicleId } = req.params;
-        const { companyId } = req.user;
+        const companyId = req.companyId;
 
         // Verify vehicle ownership
-        const vehicle = await prisma.vehicle.findFirst({
+        const vehicle = await prisma.vehicles.findFirst({
             where: { id: vehicleId, companyId }
         });
 
@@ -34,7 +36,7 @@ router.get('/:vehicleId/zones', async (req, res) => {
         }
 
         // Get linked zones
-        const vehicleZones = await prisma.vehicleZone.findMany({
+        const vehicleZones = await prisma.vehicle_zones.findMany({
             where: { vehicleId },
             include: {
                 zone: {
@@ -79,7 +81,7 @@ router.get('/:vehicleId/zones', async (req, res) => {
 router.post('/:vehicleId/zones', async (req, res) => {
     try {
         const { vehicleId } = req.params;
-        const { companyId } = req.user;
+        const companyId = req.companyId;
         const { zoneIds, isApproved = true, canOperate = true } = req.body;
 
         if (!zoneIds || !Array.isArray(zoneIds) || zoneIds.length === 0) {
@@ -90,7 +92,7 @@ router.post('/:vehicleId/zones', async (req, res) => {
         }
 
         // Verify vehicle ownership
-        const vehicle = await prisma.vehicle.findFirst({
+        const vehicle = await prisma.vehicles.findFirst({
             where: { id: vehicleId, companyId }
         });
 
@@ -102,7 +104,7 @@ router.post('/:vehicleId/zones', async (req, res) => {
         }
 
         // Verify all zones belong to company
-        const zones = await prisma.zone.findMany({
+        const zones = await prisma.zones.findMany({
             where: {
                 id: { in: zoneIds },
                 companyId
@@ -124,13 +126,13 @@ router.post('/:vehicleId/zones', async (req, res) => {
             canOperate
         }));
 
-        await prisma.vehicleZone.createMany({
+        await prisma.vehicle_zones.createMany({
             data: vehicleZoneData,
             skipDuplicates: true
         });
 
         // Fetch updated vehicle zones
-        const updatedVehicleZones = await prisma.vehicleZone.findMany({
+        const updatedVehicleZones = await prisma.vehicle_zones.findMany({
             where: { vehicleId },
             include: {
                 zone: true
@@ -167,10 +169,10 @@ router.post('/:vehicleId/zones', async (req, res) => {
 router.delete('/:vehicleId/zones/:zoneId', async (req, res) => {
     try {
         const { vehicleId, zoneId } = req.params;
-        const { companyId } = req.user;
+        const companyId = req.companyId;
 
         // Verify vehicle ownership
-        const vehicle = await prisma.vehicle.findFirst({
+        const vehicle = await prisma.vehicles.findFirst({
             where: { id: vehicleId, companyId }
         });
 
@@ -182,7 +184,7 @@ router.delete('/:vehicleId/zones/:zoneId', async (req, res) => {
         }
 
         // Find and delete the link
-        const vehicleZone = await prisma.vehicleZone.findFirst({
+        const vehicleZone = await prisma.vehicle_zones.findFirst({
             where: {
                 vehicleId,
                 zoneId
@@ -196,7 +198,7 @@ router.delete('/:vehicleId/zones/:zoneId', async (req, res) => {
             });
         }
 
-        await prisma.vehicleZone.delete({
+        await prisma.vehicle_zones.delete({
             where: { id: vehicleZone.id }
         });
 
@@ -222,11 +224,11 @@ router.delete('/:vehicleId/zones/:zoneId', async (req, res) => {
 router.put('/:vehicleId/zones/:zoneId/permissions', async (req, res) => {
     try {
         const { vehicleId, zoneId } = req.params;
-        const { companyId } = req.user;
+        const companyId = req.companyId;
         const { isApproved, canOperate, validFrom, validTo } = req.body;
 
         // Verify vehicle ownership
-        const vehicle = await prisma.vehicle.findFirst({
+        const vehicle = await prisma.vehicles.findFirst({
             where: { id: vehicleId, companyId }
         });
 
@@ -238,7 +240,7 @@ router.put('/:vehicleId/zones/:zoneId/permissions', async (req, res) => {
         }
 
         // Find vehicle-zone link
-        const vehicleZone = await prisma.vehicleZone.findFirst({
+        const vehicleZone = await prisma.vehicle_zones.findFirst({
             where: { vehicleId, zoneId }
         });
 
@@ -250,7 +252,7 @@ router.put('/:vehicleId/zones/:zoneId/permissions', async (req, res) => {
         }
 
         // Update permissions
-        const updated = await prisma.vehicleZone.update({
+        const updated = await prisma.vehicle_zones.update({
             where: { id: vehicleZone.id },
             data: {
                 ...(typeof isApproved === 'boolean' && { isApproved }),
@@ -283,7 +285,7 @@ router.put('/:vehicleId/zones/:zoneId/permissions', async (req, res) => {
 router.post('/:vehicleId/zones/bulk', async (req, res) => {
     try {
         const { vehicleId } = req.params;
-        const { companyId } = req.user;
+        const companyId = req.companyId;
         const {
             zoneIds,
             replaceExisting = false,
@@ -299,7 +301,7 @@ router.post('/:vehicleId/zones/bulk', async (req, res) => {
         }
 
         // Verify vehicle ownership
-        const vehicle = await prisma.vehicle.findFirst({
+        const vehicle = await prisma.vehicles.findFirst({
             where: { id: vehicleId, companyId }
         });
 
@@ -312,14 +314,14 @@ router.post('/:vehicleId/zones/bulk', async (req, res) => {
 
         // If replacing, delete existing links
         if (replaceExisting) {
-            await prisma.vehicleZone.deleteMany({
+            await prisma.vehicle_zones.deleteMany({
                 where: { vehicleId }
             });
         }
 
         // Verify all zones belong to company
         if (zoneIds.length > 0) {
-            const zones = await prisma.zone.findMany({
+            const zones = await prisma.zones.findMany({
                 where: {
                     id: { in: zoneIds },
                     companyId
@@ -341,14 +343,14 @@ router.post('/:vehicleId/zones/bulk', async (req, res) => {
                 canOperate
             }));
 
-            await prisma.vehicleZone.createMany({
+            await prisma.vehicle_zones.createMany({
                 data: vehicleZoneData,
                 skipDuplicates: true
             });
         }
 
         // Fetch updated vehicle zones
-        const updatedVehicleZones = await prisma.vehicleZone.findMany({
+        const updatedVehicleZones = await prisma.vehicle_zones.findMany({
             where: { vehicleId },
             include: {
                 zone: true
@@ -389,10 +391,10 @@ router.post('/:vehicleId/zones/bulk', async (req, res) => {
 router.get('/:vehicleId/zones/available', async (req, res) => {
     try {
         const { vehicleId } = req.params;
-        const { companyId } = req.user;
+        const companyId = req.companyId;
 
         // Verify vehicle ownership
-        const vehicle = await prisma.vehicle.findFirst({
+        const vehicle = await prisma.vehicles.findFirst({
             where: { id: vehicleId, companyId }
         });
 
@@ -404,7 +406,7 @@ router.get('/:vehicleId/zones/available', async (req, res) => {
         }
 
         // Get zones already assigned to vehicle
-        const assignedZones = await prisma.vehicleZone.findMany({
+        const assignedZones = await prisma.vehicle_zones.findMany({
             where: { vehicleId },
             select: { zoneId: true }
         });
@@ -412,7 +414,7 @@ router.get('/:vehicleId/zones/available', async (req, res) => {
         const assignedZoneIds = assignedZones.map(vz => vz.zoneId);
 
         // Get all company zones not assigned to vehicle
-        const availableZones = await prisma.zone.findMany({
+        const availableZones = await prisma.zones.findMany({
             where: {
                 companyId,
                 id: { notIn: assignedZoneIds }

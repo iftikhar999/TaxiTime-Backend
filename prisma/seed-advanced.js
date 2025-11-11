@@ -454,7 +454,7 @@ async function main() {
     jobs.push(job);
 
     // Create assignment for this job
-    assignments.push(await prisma.assignment.create({
+    assignments.push(await prisma.assignments.create({
       data: {
         jobId: job.id,
         driverId: driver.id,

@@ -32,7 +32,7 @@ async function checkDriverActivity(io) {
         isActive: true
       },
       include: {
-        locationUpdates: {
+        location_updates: {
           orderBy: [
             { timestamp: 'desc' },
             { createdAt: 'desc' }
@@ -48,7 +48,7 @@ async function checkDriverActivity(io) {
           },
           take: 1
         },
-        assignedJobs: {
+        jobs_jobs_assignedDriverIdTousers: {
           where: {
             status: {
               in: ['ASSIGNED', 'OFFERED', 'ACCEPTED', 'STARTED', 'IN_PROGRESS']
@@ -65,7 +65,7 @@ async function checkDriverActivity(io) {
     
     for (const driver of allDrivers) {
       // Check multiple sources for last activity time
-      const lastLocationUpdate = driver.locationUpdates[0];
+      const lastLocationUpdate = driver.location_updates[0];
       const locationUpdateTime = lastLocationUpdate 
         ? (lastLocationUpdate.timestamp || lastLocationUpdate.createdAt)
         : null;
@@ -144,14 +144,14 @@ async function checkDriverActivity(io) {
 
     for (const driver of inactiveDrivers) {
       try {
-        const lastLocationUpdate = driver.locationUpdates[0];
+        const lastLocationUpdate = driver.location_updates?.[0];
         const lastUpdateTime = lastLocationUpdate 
           ? (lastLocationUpdate.timestamp || lastLocationUpdate.createdAt)
           : null;
 
         console.log(`[Driver Activity Monitor] Processing driver ${driver.id} (${driver.firstName} ${driver.lastName})`);
         console.log(`  - Last location update: ${lastUpdateTime ? lastUpdateTime.toISOString() : 'Never'}`);
-        console.log(`  - Active jobs: ${driver.assignedJobs.length}`);
+        console.log(`  - Active jobs: ${driver.jobs_jobs_assignedDriverIdTousers.length}`);
         console.log(`  - Active shifts: ${driver.shifts.length}`);
 
         const activeShift = driver.shifts[0];
@@ -161,21 +161,17 @@ async function checkDriverActivity(io) {
         // Set shift to OFFLINE (instead of updating driver status directly)
         // ✅ FIX: Don't end the shift - just mark as OFFLINE so driver can resume later
         if (activeShift) {
-          await prisma.shift.update({
-            where: { id: activeShift.id },
-            data: {
-              status: 'OFFLINE',
-              // ❌ DON'T SET endTime - keep shift active for resume
-              // endTime: now,
-              updatedAt: now
-            }
-          });
+          await prisma.$queryRaw`
+            UPDATE shifts 
+            SET status = 'OFFLINE', "updatedAt" = ${now}
+            WHERE id = ${activeShift.id}
+          `;
           console.log(`  ✓ Set shift ${activeShift.id} to OFFLINE (shift remains active for resume)`);
         }
 
         // Unassign jobs
         const unassignedJobs = [];
-        for (const job of driver.assignedJobs) {
+        for (const job of driver.jobs_jobs_assignedDriverIdTousers) {
           await prisma.job.update({
             where: { id: job.id },
             data: {

@@ -115,7 +115,7 @@ class StripeService {
             });
 
             // Get subscription plan details
-            const plan = await prisma.subscriptionPlan.findUnique({
+            const plan = await prisma.subscription_plans.findUnique({
                 where: { id: planId }
             });
 

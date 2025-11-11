@@ -62,7 +62,7 @@ router.get('/', async (req, res) => {
             prisma.job.findMany({
                 where,
                 include: {
-                    customer: {
+                    users_jobs_customerIdTousers: {
                         select: {
                             id: true,
                             firstName: true,
@@ -71,7 +71,7 @@ router.get('/', async (req, res) => {
                             email: true
                         }
                     },
-                    driver: {
+                    users_jobs_assignedDriverIdTousers: {
                         select: {
                             id: true,
                             firstName: true,
@@ -80,20 +80,12 @@ router.get('/', async (req, res) => {
                             email: true
                         }
                     },
-                    company: {
+                    companies: {
                         select: {
                             id: true,
                             legalName: true,
                             brandName: true,
                             name: true
-                        }
-                    },
-                    vehicle: {
-                        select: {
-                            id: true,
-                            make: true,
-                            model: true,
-                            licensePlate: true
                         }
                     }
                 },
@@ -104,10 +96,21 @@ router.get('/', async (req, res) => {
             prisma.job.count({ where })
         ]);
 
+        // Transform for frontend compatibility
+        const transformedJobs = jobs.map(job => ({
+            ...job,
+            customer: job.users_jobs_customerIdTousers || null,
+            driver: job.users_jobs_assignedDriverIdTousers || null,
+            company: job.companies || null,
+            // Convert Decimal to number for actualFare
+            actualFare: job.actualFare ? Number(job.actualFare) : null,
+            estimatedPrice: job.estimatedPrice ? Number(job.estimatedPrice) : null
+        }));
+
         const totalPages = Math.ceil(totalCount / parseInt(limit));
 
         res.json({
-            jobs,
+            jobs: transformedJobs,
             pagination: {
                 currentPage: parseInt(page),
                 totalPages,
@@ -130,7 +133,7 @@ router.get('/:id', async (req, res) => {
         const job = await prisma.job.findUnique({
             where: { id },
             include: {
-                customer: {
+                users_jobs_customerIdTousers: {
                     select: {
                         id: true,
                         firstName: true,
@@ -140,17 +143,16 @@ router.get('/:id', async (req, res) => {
                         address: true
                     }
                 },
-                driver: {
+                users_jobs_assignedDriverIdTousers: {
                     select: {
                         id: true,
                         firstName: true,
                         lastName: true,
                         phone: true,
-                        email: true,
-                        driverProfile: true
+                        email: true
                     }
                 },
-                company: {
+                companies: {
                     select: {
                         id: true,
                         legalName: true,
@@ -160,29 +162,7 @@ router.get('/:id', async (req, res) => {
                         phone: true
                     }
                 },
-                vehicle: {
-                    select: {
-                        id: true,
-                        make: true,
-                        model: true,
-                        year: true,
-                        color: true,
-                        licensePlate: true,
-                        vehicleType: true
-                    }
-                },
-                payment: true,
-                ratings: {
-                    include: {
-                        ratedBy: {
-                            select: {
-                                id: true,
-                                firstName: true,
-                                lastName: true
-                            }
-                        }
-                    }
-                }
+                payments: true
             }
         });
 
@@ -190,7 +170,19 @@ router.get('/:id', async (req, res) => {
             return res.status(404).json({ error: 'Job not found' });
         }
 
-        res.json(job);
+        // Transform for frontend compatibility
+        const transformedJob = {
+            ...job,
+            customer: job.users_jobs_customerIdTousers || null,
+            driver: job.users_jobs_assignedDriverIdTousers || null,
+            company: job.companies || null,
+            payment: job.payments?.[0] || null,
+            // Convert Decimal to number
+            actualFare: job.actualFare ? Number(job.actualFare) : null,
+            estimatedPrice: job.estimatedPrice ? Number(job.estimatedPrice) : null
+        };
+
+        res.json(transformedJob);
     } catch (error) {
         console.error('Error fetching job details:', error);
         res.status(500).json({ error: 'Failed to fetch job details' });
@@ -249,7 +241,7 @@ router.get('/analytics', async (req, res) => {
             }),
 
             // Total revenue
-            prisma.payment.aggregate({
+            prisma.payments.aggregate({
                 where: {
                     status: 'COMPLETED',
                     createdAt: { gte: startDate }
@@ -258,7 +250,7 @@ router.get('/analytics', async (req, res) => {
             }),
 
             // Average rating
-            prisma.rating.aggregate({
+            prisma.ratings.aggregate({
                 where: {
                     createdAt: { gte: startDate }
                 },

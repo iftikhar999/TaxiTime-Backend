@@ -1,6 +1,7 @@
 const express = require('express');
 const { PrismaClient } = require('@prisma/client');
 const { authenticateToken, authorizeRoles } = require('../middleware/auth');
+const { createId } = require('@paralleldrive/cuid2');
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -76,10 +77,10 @@ router.get('/', async (req, res) => {
 
     // Get companies with owner info
     const [companies, totalCount] = await Promise.all([
-      prisma.company.findMany({
+      prisma.companies.findMany({
         where,
         include: {
-          owner: {
+          users_companies_ownerIdTousers: {
             select: {
               id: true,
               firstName: true,
@@ -90,7 +91,7 @@ router.get('/', async (req, res) => {
           },
           _count: {
             select: {
-              users: { where: { role: 'DRIVER', isActive: true } },
+              users_users_companyIdTocompanies: { where: { role: 'DRIVER', isActive: true } },
               vehicles: { where: { isActive: true } },
               rides: true,
             }
@@ -100,12 +101,14 @@ router.get('/', async (req, res) => {
         skip,
         take: parseInt(limit),
       }),
-      prisma.company.count({ where }),
+      prisma.companies.count({ where }),
     ]);
 
     // Transform companies for frontend compatibility
     const transformedCompanies = companies.map(company => ({
       ...company,
+      // Map owner relation for cleaner response
+      owner: company.users_companies_ownerIdTousers || null,
       // Legacy compatibility fields
       name: company.legalName || company.brandName || company.name,
       services: company.features || company.services || ['TAXI'],
@@ -151,7 +154,7 @@ router.get('/', async (req, res) => {
 // GET /api/admin/companies/dropdown - Simple list for dropdowns
 router.get('/dropdown', async (req, res) => {
   try {
-    const companies = await prisma.company.findMany({
+    const companies = await prisma.companies.findMany({
       where: { isActive: true },
       select: {
         id: true,
@@ -184,10 +187,10 @@ router.get('/:id', async (req, res) => {
   try {
     const { id } = req.params;
 
-    const company = await prisma.company.findUnique({
+    const company = await prisma.companies.findUnique({
       where: { id },
       include: {
-        owner: {
+        users_companies_ownerIdTousers: {
           select: {
             id: true,
             firstName: true,
@@ -198,7 +201,7 @@ router.get('/:id', async (req, res) => {
             isVerified: true,
           }
         },
-        users: {
+        users_users_companyIdTocompanies: {
           select: {
             id: true,
             firstName: true,
@@ -226,7 +229,7 @@ router.get('/:id', async (req, res) => {
         },
         _count: {
           select: {
-            users: true,
+            users_users_companyIdTocompanies: true,
             vehicles: true,
             rides: true,
           }
@@ -238,11 +241,23 @@ router.get('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Company not found' });
     }
 
+    // Transform for frontend
+    const response = {
+      ...company,
+      owner: company.users_companies_ownerIdTousers || null,
+      users: company.users_users_companyIdTocompanies || [],
+      _count: {
+        users: company._count.users_users_companyIdTocompanies,
+        vehicles: company._count.vehicles,
+        rides: company._count.rides
+      }
+    };
+
     // Get recent activity/stats
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
     const [recentStats, recentPayments] = await Promise.all([
-      prisma.ride.aggregate({
+      prisma.rides.aggregate({
         where: {
           companyId: id,
           createdAt: { gte: thirtyDaysAgo },
@@ -250,7 +265,7 @@ router.get('/:id', async (req, res) => {
         _count: true,
         _sum: { actualFare: true },
       }),
-      prisma.payment.aggregate({
+      prisma.payments.aggregate({
         where: {
           companyId: id,
           status: 'PAID',
@@ -262,7 +277,7 @@ router.get('/:id', async (req, res) => {
     ]);
 
     const companyWithStats = {
-      ...company,
+      ...response,
       stats: {
         last30Days: {
           rides: recentStats._count || 0,
@@ -337,7 +352,7 @@ router.post('/', async (req, res) => {
     }
 
     // Check if company email already exists
-    const existingCompany = await prisma.company.findFirst({
+    const existingCompany = await prisma.companies.findFirst({
       where: {
         OR: [
           { primaryContactEmail: companyEmail },
@@ -402,7 +417,7 @@ router.post('/', async (req, res) => {
     console.log('Creating company with ownerId:', ownerId);
 
     // Create company
-    const company = await prisma.company.create({
+    const newCompany = await prisma.companies.create({
       data: {
         // Core Identity
         legalName: companyLegalName,
@@ -491,7 +506,7 @@ router.post('/', async (req, res) => {
         ownerId
       },
       include: {
-        owner: {
+        users_companies_ownerIdTousers: {
           select: {
             id: true,
             firstName: true,
@@ -503,9 +518,15 @@ router.post('/', async (req, res) => {
       }
     });
 
+    // Transform for frontend
+    const response = {
+      ...newCompany,
+      owner: newCompany.users_companies_ownerIdTousers || null
+    };
+
     res.status(201).json({
       message: 'Company created successfully',
-      company
+      company: response
     });
   } catch (error) {
     console.error('Error creating company:', error);
@@ -563,7 +584,7 @@ router.put('/:id', async (req, res) => {
     } = req.body;
 
     // Check if company exists
-    const existingCompany = await prisma.company.findUnique({
+    const existingCompany = await prisma.companies.findUnique({
       where: { id }
     });
 
@@ -576,7 +597,7 @@ router.put('/:id', async (req, res) => {
 
     // Check email uniqueness if changed
     if (companyEmail && companyEmail !== existingCompany.email && companyEmail !== existingCompany.primaryContactEmail) {
-      const emailExists = await prisma.company.findFirst({
+      const emailExists = await prisma.companies.findFirst({
         where: {
           OR: [
             { email: companyEmail },
@@ -637,7 +658,7 @@ router.put('/:id', async (req, res) => {
         }
 
         // Validate that the plan exists
-        const planExists = await prisma.subscriptionPlan.findUnique({
+        const planExists = await prisma.subscription_plans.findUnique({
           where: { id: parsedPlanId }
         });
 
@@ -756,11 +777,11 @@ router.put('/:id', async (req, res) => {
       }
     }
 
-    const company = await prisma.company.update({
+    const company = await prisma.companies.update({
       where: { id },
       data: updateData,
       include: {
-        owner: {
+        users_companies_ownerIdTousers: {
           select: {
             id: true,
             firstName: true,
@@ -772,9 +793,15 @@ router.put('/:id', async (req, res) => {
       }
     });
 
+    // Transform for frontend
+    const response = {
+      ...company,
+      owner: company.users_companies_ownerIdTousers || null
+    };
+
     res.json({
       message: 'Company updated successfully',
-      company
+      company: response
     });
   } catch (error) {
     console.error('Error updating company:', error);
@@ -787,7 +814,7 @@ router.patch('/:id/toggle-status', async (req, res) => {
   try {
     const { id } = req.params;
 
-    const company = await prisma.company.findUnique({
+    const company = await prisma.companies.findUnique({
       where: { id }
     });
 
@@ -795,11 +822,11 @@ router.patch('/:id/toggle-status', async (req, res) => {
       return res.status(404).json({ error: 'Company not found' });
     }
 
-    const updatedCompany = await prisma.company.update({
+    const updatedCompany = await prisma.companies.update({
       where: { id },
       data: { isActive: !company.isActive },
       include: {
-        owner: {
+        users_companies_ownerIdTousers: {
           select: {
             id: true,
             firstName: true,
@@ -810,9 +837,15 @@ router.patch('/:id/toggle-status', async (req, res) => {
       }
     });
 
+    // Transform for frontend
+    const response = {
+      ...updatedCompany,
+      owner: updatedCompany.users_companies_ownerIdTousers || null
+    };
+
     res.json({
       message: `Company ${updatedCompany.isActive ? 'activated' : 'deactivated'} successfully`,
-      company: updatedCompany
+      company: response
     });
   } catch (error) {
     console.error('Error toggling company status:', error);
@@ -826,7 +859,7 @@ router.patch('/:id/verify', async (req, res) => {
     const { id } = req.params;
     const { verified = true } = req.body;
 
-    const existingCompany = await prisma.company.findUnique({ where: { id } });
+    const existingCompany = await prisma.companies.findUnique({ where: { id } });
 
     if (!existingCompany) {
       return res.status(404).json({ error: 'Company not found' });
@@ -838,11 +871,11 @@ router.patch('/:id/verify', async (req, res) => {
       kycLastReviewedAt: new Date(),
     };
 
-    const company = await prisma.company.update({
+    const company = await prisma.companies.update({
       where: { id },
       data,
       include: {
-        owner: {
+        users_companies_ownerIdTousers: {
           select: {
             id: true,
             firstName: true,
@@ -853,9 +886,15 @@ router.patch('/:id/verify', async (req, res) => {
       }
     });
 
+    // Transform for frontend
+    const response = {
+      ...company,
+      owner: company.users_companies_ownerIdTousers || null
+    };
+
     res.json({
       message: `Company ${verified ? 'verified' : 'unverified'} successfully`,
-      company
+      company: response
     });
   } catch (error) {
     console.error('Error verifying company:', error);
@@ -870,7 +909,7 @@ router.delete('/:id', async (req, res) => {
 
     // Check if company has active operations
     const [activeRides, activeDrivers] = await Promise.all([
-      prisma.ride.count({
+      prisma.rides.count({
         where: {
           companyId: id,
           status: { in: ['REQUESTED', 'ACCEPTED', 'DRIVER_ASSIGNED', 'PICKED_UP', 'IN_PROGRESS'] }
@@ -893,7 +932,7 @@ router.delete('/:id', async (req, res) => {
 
     // Soft delete: deactivate company and all associated users/vehicles
     await Promise.all([
-      prisma.company.update({
+      prisma.companies.update({
         where: { id },
         data: {
           isActive: false,
@@ -908,7 +947,7 @@ router.delete('/:id', async (req, res) => {
           deletedAt: new Date()
         }
       }),
-      prisma.vehicle.updateMany({
+      prisma.vehicles.updateMany({
         where: { companyId: id },
         data: { isActive: false }
       })
@@ -930,7 +969,7 @@ router.post('/:id/reactivate', async (req, res) => {
     const { id } = req.params;
 
     // Check if company exists
-    const existingCompany = await prisma.company.findUnique({
+    const existingCompany = await prisma.companies.findUnique({
       where: { id }
     });
 
@@ -947,7 +986,7 @@ router.post('/:id/reactivate', async (req, res) => {
     }
 
     // Reactivate company
-    const company = await prisma.company.update({
+    const company = await prisma.companies.update({
       where: { id },
       data: {
         isActive: true,
@@ -955,8 +994,8 @@ router.post('/:id/reactivate', async (req, res) => {
         deletedAt: null
       },
       include: {
-        subscriptionPlan: true,
-        owner: {
+        subscription_plans: true,
+        users_companies_ownerIdTousers: {
           select: {
             id: true,
             firstName: true,
@@ -971,6 +1010,8 @@ router.post('/:id/reactivate', async (req, res) => {
       message: 'Company reactivated successfully',
       company: {
         ...company,
+        subscriptionPlan: company.subscription_plans || null,
+        owner: company.users_companies_ownerIdTousers || null,
         status: getCompanyStatus(company)
       }
     });
@@ -1006,7 +1047,7 @@ router.get('/:id/analytics', async (req, res) => {
 
     const [rideStats, paymentStats, driverStats, dailyData] = await Promise.all([
       // Ride statistics
-      prisma.ride.groupBy({
+      prisma.rides.groupBy({
         by: ['status'],
         where: {
           companyId: id,
@@ -1016,7 +1057,7 @@ router.get('/:id/analytics', async (req, res) => {
       }),
 
       // Payment statistics
-      prisma.payment.aggregate({
+      prisma.payments.aggregate({
         where: {
           companyId: id,
           createdAt: { gte: startDate }
@@ -1089,16 +1130,18 @@ router.get('/:id/settings', async (req, res) => {
     const { id } = req.params;
 
     // Get company settings, create defaults if not exists
-    let settings = await prisma.companySettings.findUnique({
+    let settings = await prisma.company_settings.findUnique({
       where: { companyId: id }
     });
 
     if (!settings) {
       // Create default settings for company
-      settings = await prisma.companySettings.create({
+      settings = await prisma.company_settings.create({
         data: {
+          id: createId(),
           companyId: id,
-          locationUpdateInterval: 2 // Default 2 seconds
+          locationUpdateInterval: 2, // Default 2 seconds
+          updatedAt: new Date()
         }
       });
     }
@@ -1143,7 +1186,7 @@ router.put('/:id/settings', async (req, res) => {
     }
 
     // Update or create company settings
-    const settings = await prisma.companySettings.upsert({
+    const settings = await prisma.company_settings.upsert({
       where: { companyId: id },
       update: {
         locationUpdateInterval,
@@ -1152,10 +1195,12 @@ router.put('/:id/settings', async (req, res) => {
         updatedAt: new Date()
       },
       create: {
+        id: createId(),
         companyId: id,
         locationUpdateInterval: locationUpdateInterval || 2,
         heartbeatInterval: heartbeatInterval || 30,
-        ...otherSettings
+        ...otherSettings,
+        updatedAt: new Date()
       }
     });
 

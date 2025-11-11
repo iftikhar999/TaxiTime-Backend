@@ -1,10 +1,10 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
-const { PrismaClient } = require('@prisma/client');
+const prisma = require('../lib/prisma');
 const { auth } = require('../middleware/auth');
 const { companyMiddleware, checkSubscriptionLimits } = require('../middleware/company');
 
-const prisma = new PrismaClient();
+
 const router = express.Router();
 
 // Attach auth and company context
@@ -27,17 +27,18 @@ const DRIVER_SELECT = {
 const upcase = (value, fallback) => (value ? value.toString().toUpperCase() : fallback);
 
 const mapDriver = (driver, extras = {}) => {
-  const fullName = [driver.user.firstName, driver.user.lastName].filter(Boolean).join(' ').trim();
+  const relatedUser = driver.user || driver.users;
+  const fullName = [relatedUser?.firstName, relatedUser?.lastName].filter(Boolean).join(' ').trim();
 
   return {
     id: driver.id,
     userId: driver.userId,
-    name: fullName || driver.user.email,
-    firstName: driver.user.firstName,
-    lastName: driver.user.lastName,
-    email: driver.user.email,
-    phone: driver.user.phone,
-    role: driver.user.role, // Add role to returned data
+    name: fullName || relatedUser?.email,
+    firstName: relatedUser?.firstName,
+    lastName: relatedUser?.lastName,
+    email: relatedUser?.email,
+    phone: relatedUser?.phone,
+    role: relatedUser?.role, // Add role to returned data
     status: driver.status?.toLowerCase() || 'active',
     employmentType: driver.employmentType,
     hireDate: driver.hireDate,
@@ -48,11 +49,11 @@ const mapDriver = (driver, extras = {}) => {
     backgroundCheckExpiry: driver.backgroundCheckExpiry,
     emergencyContact: driver.panicContactName,
     emergencyPhone: driver.panicContactPhone,
-    isActive: driver.user.isActive,
-    isVerified: driver.user.isVerified,
-    lastLoginAt: driver.user.lastLoginAt,
-    address: driver.user.address?.street || driver.user.address?.line1 || null,
-    city: driver.user.address?.city || null,
+    isActive: relatedUser?.isActive,
+    isVerified: relatedUser?.isVerified,
+    lastLoginAt: relatedUser?.lastLoginAt,
+    address: relatedUser?.address?.street || relatedUser?.address?.line1 || null,
+    city: relatedUser?.address?.city || null,
     ...extras,
   };
 };
@@ -85,27 +86,27 @@ router.get('/', async (req, res) => {
     }
 
     const [records, total] = await Promise.all([
-      prisma.companyDriver.findMany({
+      prisma.company_drivers.findMany({
         where,
         include: {
-          user: { select: DRIVER_SELECT },
+          users: { select: DRIVER_SELECT },
         },
         orderBy: { createdAt: 'desc' },
         skip,
         take: Number(limit),
       }),
-      prisma.companyDriver.count({ where }),
+      prisma.company_drivers.count({ where }),
     ]);
 
     const enriched = await Promise.all(
       records.map(async (driver) => {
         const [ridesCompleted, totalEarnings, ratingAgg] = await Promise.all([
-          prisma.ride.count({ where: { driverId: driver.userId } }),
-          prisma.ride.aggregate({
+          prisma.rides.count({ where: { driverId: driver.userId } }),
+          prisma.rides.aggregate({
             where: { driverId: driver.userId, status: 'COMPLETED' },
             _sum: { actualFare: true },
           }),
-          prisma.rating.aggregate({
+          prisma.ratings.aggregate({
             where: { rateeId: driver.userId },
             _avg: { rating: true },
           }),
@@ -137,10 +138,10 @@ router.get('/', async (req, res) => {
 // GET /api/owner/drivers/:id
 router.get('/:id', async (req, res) => {
   try {
-    const driver = await prisma.companyDriver.findFirst({
+    const driver = await prisma.company_drivers.findFirst({
       where: { id: req.params.id, companyId: req.companyId },
       include: {
-        user: { select: DRIVER_SELECT },
+        users: { select: DRIVER_SELECT },
       },
     });
 
@@ -149,14 +150,14 @@ router.get('/:id', async (req, res) => {
     }
 
     const [completedRides, cancelledRides, totalEarnings, averageRating, lastRide] = await Promise.all([
-      prisma.ride.count({ where: { driverId: driver.userId, status: 'COMPLETED' } }),
-      prisma.ride.count({ where: { driverId: driver.userId, status: 'CANCELLED' } }),
-      prisma.ride.aggregate({
+      prisma.rides.count({ where: { driverId: driver.userId, status: 'COMPLETED' } }),
+      prisma.rides.count({ where: { driverId: driver.userId, status: 'CANCELLED' } }),
+      prisma.rides.aggregate({
         where: { driverId: driver.userId, status: 'COMPLETED' },
         _sum: { actualFare: true },
       }),
-      prisma.rating.aggregate({ where: { rateeId: driver.userId }, _avg: { rating: true } }),
-      prisma.ride.findFirst({
+      prisma.ratings.aggregate({ where: { rateeId: driver.userId }, _avg: { rating: true } }),
+      prisma.rides.findFirst({
         where: { driverId: driver.userId },
         orderBy: [{ completedAt: 'desc' }, { createdAt: 'desc' }],
         select: { id: true, status: true, completedAt: true, createdAt: true, actualFare: true },
@@ -239,7 +240,7 @@ router.post('/', checkSubscriptionLimits('driver'), async (req, res) => {
       select: DRIVER_SELECT,
     });
 
-    const companyDriver = await prisma.companyDriver.create({
+    const companyDriver = await prisma.company_drivers.create({
       data: {
         companyId: req.companyId,
         userId: user.id,
@@ -255,7 +256,7 @@ router.post('/', checkSubscriptionLimits('driver'), async (req, res) => {
         panicContactPhone: emergencyPhone || null,
       },
       include: {
-        user: { select: DRIVER_SELECT },
+        users: { select: DRIVER_SELECT },
       },
     });
 
@@ -269,9 +270,9 @@ router.post('/', checkSubscriptionLimits('driver'), async (req, res) => {
 // PUT /api/owner/drivers/:id
 router.put('/:id', async (req, res) => {
   try {
-    const driver = await prisma.companyDriver.findFirst({
+    const driver = await prisma.company_drivers.findFirst({
       where: { id: req.params.id, companyId: req.companyId },
-      include: { user: { select: DRIVER_SELECT } },
+      include: { users: { select: DRIVER_SELECT } },
     });
 
     if (!driver) {
@@ -306,13 +307,15 @@ router.put('/:id', async (req, res) => {
     }
 
     // Hash password if provided
+    const driverUser = driver.user || driver.users;
+
     const updateData = {
       firstName,
       lastName,
       email,
       phone,
-      isActive: typeof isActive === 'boolean' ? isActive : driver.user.isActive,
-      address: address || city ? { street: address || null, city: city || null } : driver.user.address,
+      isActive: typeof isActive === 'boolean' ? isActive : driverUser?.isActive,
+      address: address || city ? { street: address || null, city: city || null } : driverUser?.address,
     };
 
     // Update role if provided
@@ -329,7 +332,7 @@ router.put('/:id', async (req, res) => {
         where: { id: driver.userId },
         data: updateData,
       }),
-      prisma.companyDriver.update({
+      prisma.company_drivers.update({
         where: { id: driver.id },
         data: {
           employmentType: employmentType ? upcase(employmentType, 'FULL_TIME') : driver.employmentType,
@@ -346,9 +349,9 @@ router.put('/:id', async (req, res) => {
       }),
     ]);
 
-    const updated = await prisma.companyDriver.findUnique({
+    const updated = await prisma.company_drivers.findUnique({
       where: { id: driver.id },
-      include: { user: { select: DRIVER_SELECT } },
+      include: { users: { select: DRIVER_SELECT } },
     });
 
     res.json(mapDriver(updated));
@@ -367,9 +370,9 @@ router.patch('/:id/status', async (req, res) => {
       return res.status(400).json({ message: 'Status is required' });
     }
 
-    const driver = await prisma.companyDriver.findFirst({
+    const driver = await prisma.company_drivers.findFirst({
       where: { id: req.params.id, companyId: req.companyId },
-      include: { user: { select: DRIVER_SELECT } },
+      include: { users: { select: DRIVER_SELECT } },
     });
 
     if (!driver) {
@@ -380,7 +383,7 @@ router.patch('/:id/status', async (req, res) => {
     const isActive = !['SUSPENDED', 'INACTIVE', 'TERMINATED'].includes(nextStatus);
 
     await prisma.$transaction([
-      prisma.companyDriver.update({
+      prisma.company_drivers.update({
         where: { id: driver.id },
         data: { status: nextStatus },
       }),
@@ -390,9 +393,9 @@ router.patch('/:id/status', async (req, res) => {
       }),
     ]);
 
-    const updated = await prisma.companyDriver.findUnique({
+    const updated = await prisma.company_drivers.findUnique({
       where: { id: driver.id },
-      include: { user: { select: DRIVER_SELECT } },
+      include: { users: { select: DRIVER_SELECT } },
     });
 
     res.json(mapDriver(updated));
@@ -405,9 +408,9 @@ router.patch('/:id/status', async (req, res) => {
 // DELETE /api/owner/drivers/:id
 router.delete('/:id', async (req, res) => {
   try {
-    const driver = await prisma.companyDriver.findFirst({
+    const driver = await prisma.company_drivers.findFirst({
       where: { id: req.params.id, companyId: req.companyId },
-      include: { user: { select: DRIVER_SELECT } },
+      include: { users: { select: DRIVER_SELECT } },
     });
 
     if (!driver) {
@@ -415,7 +418,7 @@ router.delete('/:id', async (req, res) => {
     }
 
     await prisma.$transaction([
-      prisma.companyDriver.update({
+      prisma.company_drivers.update({
         where: { id: driver.id },
         data: { status: 'TERMINATED' },
       }),
@@ -435,7 +438,7 @@ router.delete('/:id', async (req, res) => {
 // GET /api/owner/drivers/:id/stats
 router.get('/:id/stats', async (req, res) => {
   try {
-    const driver = await prisma.companyDriver.findFirst({
+    const driver = await prisma.company_drivers.findFirst({
       where: { id: req.params.id, companyId: req.companyId },
     });
 
@@ -448,14 +451,14 @@ router.get('/:id/stats', async (req, res) => {
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
     const [completedTrips, earningsAgg, ratingAgg, averageDuration] = await Promise.all([
-      prisma.ride.count({
+      prisma.rides.count({
         where: {
           driverId: driver.userId,
           status: 'COMPLETED',
           completedAt: { gte: since },
         },
       }),
-      prisma.ride.aggregate({
+      prisma.rides.aggregate({
         where: {
           driverId: driver.userId,
           status: 'COMPLETED',
@@ -463,14 +466,14 @@ router.get('/:id/stats', async (req, res) => {
         },
         _sum: { actualFare: true },
       }),
-      prisma.rating.aggregate({
+      prisma.ratings.aggregate({
         where: {
           rateeId: driver.userId,
           createdAt: { gte: since },
         },
         _avg: { rating: true },
       }),
-      prisma.ride.aggregate({
+      prisma.rides.aggregate({
         where: {
           driverId: driver.userId,
           status: 'COMPLETED',

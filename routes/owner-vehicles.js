@@ -1,44 +1,14 @@
 const express = require('express');
-const { PrismaClient } = require('@prisma/client');
+const prisma = require('../lib/prisma');
 const { authenticateToken, authorizeRoles } = require('../middleware/auth');
+const { companyMiddleware } = require('../middleware/company');
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
 // Middleware: Require OWNER or COMPANY_ADMIN role and scope to company
 router.use(authenticateToken);
-router.use(authorizeRoles('OWNER', 'COMPANY_ADMIN'));
-
-const scopeToCompany = async (req, res, next) => {
-    try {
-        const user = await prisma.user.findUnique({
-            where: { id: req.user.id },
-            include: {
-                ownedCompany: true,
-                company: true
-            }
-        });
-
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-
-        if (user.role === 'OWNER' && user.ownedCompany) {
-            req.companyId = user.ownedCompany.id;
-        } else if (user.role === 'COMPANY_ADMIN' && user.companyId) {
-            req.companyId = user.companyId;
-        } else {
-            return res.status(403).json({ error: 'User not associated with any company' });
-        }
-
-        next();
-    } catch (error) {
-        console.error('Company scoping error:', error);
-        res.status(500).json({ error: 'Internal server error' });
-    }
-};
-
-router.use(scopeToCompany);
+router.use(authorizeRoles('OWNER', 'COMPANY_ADMIN', 'ADMIN', 'SUPER_ADMIN'));
+router.use(companyMiddleware);
 
 // GET /api/owner/vehicles - Get all company vehicles
 router.get('/', async (req, res) => {
@@ -84,13 +54,13 @@ router.get('/', async (req, res) => {
         }
 
         const [vehicleRecords, totalCount] = await Promise.all([
-            prisma.vehicle.findMany({
+            prisma.vehicles.findMany({
                 where,
                 orderBy: { createdAt: 'desc' },
                 skip,
                 take: parseInt(limit)
             }),
-            prisma.vehicle.count({ where })
+            prisma.vehicles.count({ where })
         ]);
 
         // Fetch drivers for all vehicles that have driverId
@@ -169,7 +139,7 @@ router.get('/:id', async (req, res) => {
     try {
         const { id } = req.params;
 
-        const vehicle = await prisma.vehicle.findFirst({
+        const vehicle = await prisma.vehicles.findFirst({
             where: {
                 id,
                 companyId: req.companyId
@@ -258,7 +228,7 @@ router.post('/', async (req, res) => {
         }
 
         // Check if license plate already exists in this company
-        const existingVehicle = await prisma.vehicle.findFirst({
+        const existingVehicle = await prisma.vehicles.findFirst({
             where: {
                 licensePlate,
                 companyId: req.companyId
@@ -301,7 +271,7 @@ router.post('/', async (req, res) => {
             insuranceData.inspectionExpiry = inspectionExpiry;
         }
 
-        const vehicle = await prisma.vehicle.create({
+        const vehicle = await prisma.vehicles.create({
             data: {
                 make,
                 model,
@@ -396,7 +366,7 @@ router.put('/:id', async (req, res) => {
         } = req.body;
 
         // Check if vehicle belongs to this company
-        const existingVehicle = await prisma.vehicle.findFirst({
+        const existingVehicle = await prisma.vehicles.findFirst({
             where: {
                 id,
                 companyId: req.companyId
@@ -409,7 +379,7 @@ router.put('/:id', async (req, res) => {
 
         // Check license plate uniqueness if it's being changed
         if (licensePlate && licensePlate !== existingVehicle.licensePlate) {
-            const duplicateVehicle = await prisma.vehicle.findFirst({
+            const duplicateVehicle = await prisma.vehicles.findFirst({
                 where: {
                     licensePlate,
                     companyId: req.companyId,
@@ -493,7 +463,7 @@ router.put('/:id', async (req, res) => {
             updateData.insurance = Object.keys(insuranceData).length > 0 ? insuranceData : null;
         }
 
-        const updatedVehicle = await prisma.vehicle.update({
+        const updatedVehicle = await prisma.vehicles.update({
             where: { id },
             data: updateData
         });
@@ -561,7 +531,7 @@ router.patch('/:id/status', async (req, res) => {
         }
 
         // Check if vehicle belongs to this company
-        const existingVehicle = await prisma.vehicle.findFirst({
+        const existingVehicle = await prisma.vehicles.findFirst({
             where: {
                 id,
                 companyId: req.companyId
@@ -580,7 +550,7 @@ router.patch('/:id/status', async (req, res) => {
             isAvailable: normalizedStatus === 'ACTIVE'
         };
 
-        const updatedVehicle = await prisma.vehicle.update({
+        const updatedVehicle = await prisma.vehicles.update({
             where: { id },
             data: statusUpdate
         });
@@ -604,7 +574,7 @@ router.delete('/:id', async (req, res) => {
         const { id } = req.params;
 
         // Check if vehicle belongs to this company
-        const existingVehicle = await prisma.vehicle.findFirst({
+        const existingVehicle = await prisma.vehicles.findFirst({
             where: {
                 id,
                 companyId: req.companyId
@@ -629,7 +599,7 @@ router.delete('/:id', async (req, res) => {
             });
         }
 
-        await prisma.vehicle.delete({
+        await prisma.vehicles.delete({
             where: { id }
         });
 

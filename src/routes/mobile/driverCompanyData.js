@@ -1,9 +1,8 @@
 const express = require('express');
-const { PrismaClient } = require('@prisma/client');
 const { authenticateToken } = require('../../../middleware/auth');
+const prisma = require('../../../lib/prisma');
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
 const toNumber = (value, fallback = null) => {
     if (value === null || value === undefined) return fallback;
@@ -68,11 +67,10 @@ router.get('/:id/settings', authenticateToken, async (req, res) => {
     try {
         const { id } = req.params;
 
-        const company = await prisma.company.findUnique({
+        const company = await prisma.companies.findUnique({
             where: { id },
             select: {
                 id: true,
-                name: true,
                 legalName: true,
                 brandName: true,
                 companyCode: true,
@@ -95,7 +93,7 @@ router.get('/:id/settings', authenticateToken, async (req, res) => {
             });
         }
 
-        const companySettings = await prisma.companySettings.findUnique({
+        const companySettings = await prisma.company_settings.findUnique({
             where: { companyId: id },
             select: {
                 mapProvider: true,
@@ -125,12 +123,12 @@ router.get('/:id/settings', authenticateToken, async (req, res) => {
             success: true,
             data: {
                 id: company.id,
-                name: company.name || company.brandName || company.legalName,
+                name: company.brandName || company.legalName || company.companyCode,
                 legalName: company.legalName,
                 brandName: company.brandName,
                 companyCode: company.companyCode,
                 logo: company.logo,
-                companyName: company.name || company.brandName || company.legalName,
+                companyName: company.brandName || company.legalName || company.companyCode,
                 // Provide default colors since they don't exist in schema
                 primaryColor: '#4F46E5',
                 secondaryColor: '#818CF8',
@@ -158,9 +156,9 @@ router.get('/:id/zones', authenticateToken, async (req, res) => {
         const { id } = req.params;
 
         // Check if company exists
-        const company = await prisma.company.findUnique({
+        const company = await prisma.companies.findUnique({
             where: { id },
-            select: { id: true, name: true }
+            select: { id: true, legalName: true, brandName: true }
         });
 
         if (!company) {
@@ -174,8 +172,8 @@ router.get('/:id/zones', authenticateToken, async (req, res) => {
         let zones = [];
         try {
             // Check if Zone model exists in schema
-            if (prisma.zone) {
-                zones = await prisma.zone.findMany({
+            if (prisma.zones) {
+                zones = await prisma.zones.findMany({
                     where: {
                         companyId: id,
                         isActive: true
@@ -245,7 +243,7 @@ router.get('/:id/tariffs', authenticateToken, async (req, res) => {
         const { id } = req.params;
 
         // Check if company exists
-        const company = await prisma.company.findUnique({
+        const company = await prisma.companies.findUnique({
             where: { id },
             select: { id: true, name: true }
         });
@@ -261,8 +259,8 @@ router.get('/:id/tariffs', authenticateToken, async (req, res) => {
         let tariffs = [];
         try {
             // Check if Tariff model exists in schema
-            if (prisma.tariff) {
-                const rawTariffs = await prisma.tariff.findMany({
+            if (prisma.tariffs) {
+                const rawTariffs = await prisma.tariffs.findMany({
                     where: {
                         companyId: id,
                         isActive: true
@@ -271,7 +269,6 @@ router.get('/:id/tariffs', authenticateToken, async (req, res) => {
                         id: true,
                         name: true,
                         description: true,
-                        // vehicleType: true, // ✅ FIX: Removed - field doesn't exist in Tariff model
                         baseFare: true,
                         perKmRate: true,
                         perMinuteRate: true,
@@ -284,38 +281,47 @@ router.get('/:id/tariffs', authenticateToken, async (req, res) => {
                 });
 
                 // Transform to match driver app expectations
-                tariffs = rawTariffs.map((tariff, index) => ({
-                    id: tariff.id,
-                    name: tariff.name,
-                    description: tariff.description || 'Standard pricing',
-                    type: tariff.vehicleType, // SEDAN, SUV, etc.
-                    vehicleType: tariff.vehicleType,
-                    baseFare: parseFloat(tariff.baseFare),
-                    perKmRate: parseFloat(tariff.perKmRate),
-                    perMinuteRate: parseFloat(tariff.perMinuteRate),
-                    minimumFare: parseFloat(tariff.minimumFare),
-                    waitingTimeRate: tariff.waitingFee ? parseFloat(tariff.waitingFee) : 0.25,
-                    surgeMultiplier: tariff.maxSurgeMultiplier ? parseFloat(tariff.maxSurgeMultiplier) : 1.0,
-                    isDefault: index === 0, // First tariff is default
-                    isActive: tariff.isActive,
-                    // App expects these fields
-                    timeBasedRates: [
-                        {
-                            timeSlot: 'All Day',
-                            baseFare: parseFloat(tariff.baseFare),
-                            perMileRate: parseFloat(tariff.perKmRate) * 1.60934, // Convert km to miles
-                            perMinuteRate: parseFloat(tariff.perMinuteRate),
-                            minimumFare: parseFloat(tariff.minimumFare),
-                        }
-                    ],
-                    features: [
-                        'Standard metered fare',
-                        'Real-time GPS tracking',
-                        'Cashless payment',
-                        'In-app support'
-                    ],
-                    estimatedEarning: `$${(parseFloat(tariff.baseFare) * 10).toFixed(0)}-$${(parseFloat(tariff.baseFare) * 20).toFixed(0)}/day`
-                }));
+                tariffs = rawTariffs.map((tariff, index) => {
+                    const baseFare = toNumber(tariff.baseFare, 0);
+                    const perKmRate = toNumber(tariff.perKmRate, 0);
+                    const perMinuteRate = toNumber(tariff.perMinuteRate, 0);
+                    const minimumFare = toNumber(tariff.minimumFare, 0);
+                    const waitingFee = toNumber(tariff.waitingFee, 0.25);
+                    const surgeMultiplier = toNumber(tariff.maxSurgeMultiplier, 1.0);
+                    const vehicleType = 'SEDAN';
+
+                    return {
+                        id: tariff.id,
+                        name: tariff.name,
+                        description: tariff.description || 'Standard pricing',
+                        type: vehicleType,
+                        vehicleType,
+                        baseFare,
+                        perKmRate,
+                        perMinuteRate,
+                        minimumFare,
+                        waitingTimeRate: waitingFee,
+                        surgeMultiplier,
+                        isDefault: index === 0,
+                        isActive: tariff.isActive,
+                        timeBasedRates: [
+                            {
+                                timeSlot: 'All Day',
+                                baseFare,
+                                perMileRate: perKmRate * 1.60934,
+                                perMinuteRate,
+                                minimumFare,
+                            }
+                        ],
+                        features: [
+                            'Standard metered fare',
+                            'Real-time GPS tracking',
+                            'Cashless payment',
+                            'In-app support'
+                        ],
+                        estimatedEarning: `$${(baseFare * 10).toFixed(0)}-$${(baseFare * 20).toFixed(0)}/day`
+                    };
+                });
             }
         } catch (error) {
             console.log('Tariff model not available or query error:', error.message);
@@ -382,12 +388,12 @@ router.get('/:companyId/settings', authenticateToken, async (req, res) => {
         }
 
         // Get company settings, create defaults if not exists
-        let settings = await prisma.companySettings.findUnique({
+        let settings = await prisma.company_settings.findUnique({
             where: { companyId },
         });
 
         if (!settings) {
-            settings = await prisma.companySettings.create({
+            settings = await prisma.company_settings.create({
                 data: {
                     companyId,
                     mapProvider: 'OPENSTREETMAP',

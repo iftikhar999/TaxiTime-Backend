@@ -99,12 +99,127 @@ router.get('/daily-stats', authorizeRoles(['DISPATCHER', 'OWNER', 'SUPER_ADMIN']
   }
 });
 
+// Get financial reports
+router.get('/financial', authorizeRoles(['OWNER', 'SUPER_ADMIN']), async (req, res) => {
+  try {
+    const { startDate, endDate, companyId } = req.query;
+    const userCompanyId = req.user.companyId;
+    const userRole = req.user.role;
+
+    // Validate dates
+    if (!startDate || !endDate) {
+      return res.status(400).json({
+        success: false,
+        error: 'startDate and endDate are required'
+      });
+    }
+
+    // Parse dates
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    end.setHours(23, 59, 59, 999);
+
+    // Determine which company to query
+    let targetCompanyId;
+    if (userRole === 'SUPER_ADMIN' && companyId) {
+      targetCompanyId = companyId;
+    } else {
+      targetCompanyId = userCompanyId;
+    }
+
+    // Build where clause
+    const whereClause = {
+      createdAt: {
+        gte: start,
+        lte: end
+      }
+    };
+
+    if (targetCompanyId) {
+      whereClause.companyId = targetCompanyId;
+    }
+
+    // Get payment statistics
+    const payments = await prisma.payments.aggregate({
+      where: whereClause,
+      _sum: {
+        amount: true
+      },
+      _count: {
+        id: true
+      }
+    });
+
+    // Get completed jobs with fares
+    const jobs = await prisma.job.aggregate({
+      where: {
+        ...whereClause,
+        status: 'COMPLETED'
+      },
+      _sum: {
+        actualFare: true,
+        estimatedPrice: true
+      },
+      _count: {
+        id: true
+      }
+    });
+
+    // Get driver earnings
+    const driverEarnings = await prisma.driver_earnings.aggregate({
+      where: {
+        createdAt: {
+          gte: start,
+          lte: end
+        },
+        ...(targetCompanyId && { companyId: targetCompanyId })
+      },
+      _sum: {
+        totalEarnings: true,
+        baseFare: true,
+        tips: true
+      }
+    });
+
+    // Calculate totals
+    const totalRevenue = Number(jobs._sum.actualFare || 0);
+    const totalPayments = Number(payments._sum.amount || 0);
+    const totalDriverEarnings = Number(driverEarnings._sum.totalEarnings || 0);
+    const completedJobs = jobs._count.id;
+
+    res.json({
+      success: true,
+      data: {
+        period: {
+          startDate,
+          endDate
+        },
+        totalRevenue,
+        totalPayments,
+        totalDriverEarnings,
+        companyProfit: totalRevenue - totalDriverEarnings,
+        completedJobs,
+        averageJobValue: completedJobs > 0 ? totalRevenue / completedJobs : 0,
+        paymentCount: payments._count.id
+      }
+    });
+
+  } catch (error) {
+    console.error('Error fetching financial reports:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 // General reports endpoint
 router.get('/', (req, res) => {
   res.json({
     message: 'Reports API',
     endpoints: [
-      'GET /api/reports/daily-stats?date=YYYY-MM-DD'
+      'GET /api/reports/daily-stats?date=YYYY-MM-DD',
+      'GET /api/reports/financial?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD&companyId=xxx'
     ]
   });
 });

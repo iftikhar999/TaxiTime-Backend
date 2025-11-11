@@ -126,7 +126,7 @@ class JobStatusFlowSimulator {
   async assignJobToDriver() {
     log.step(2, 'Assigning job to driver (Status: UNASSIGNED → OFFERED)...');
 
-    const assignment = await prisma.assignment.create({
+    const assignment = await prisma.assignments.create({
       data: {
         jobId: this.testJob.id,
         driverId: this.driver.id,
@@ -182,7 +182,7 @@ class JobStatusFlowSimulator {
       }
     });
 
-    await prisma.assignment.update({
+    await prisma.assignments.update({
       where: { id: this.currentAssignment.id },
       data: {
         status: 'ASSIGNED',
@@ -266,7 +266,7 @@ class JobStatusFlowSimulator {
   async simulateCompleted() {
     log.step(8, 'Complete ride (Status: IN_PROGRESS → COMPLETED)...');
 
-    await prisma.assignment.update({
+    await prisma.assignments.update({
       where: { id: this.currentAssignment.id },
       data: {
         status: 'COMPLETED',
@@ -306,7 +306,7 @@ class JobStatusFlowSimulator {
       }
     });
 
-    await prisma.assignment.update({
+    await prisma.assignments.update({
       where: { id: this.currentAssignment.id },
       data: {
         status: 'REJECTED',
@@ -351,7 +351,7 @@ class JobStatusFlowSimulator {
 
     log.step(4, 'Dispatcher cancels job (Status: ASSIGNED → CANCELLED)...');
 
-    await prisma.assignment.update({
+    await prisma.assignments.update({
       where: { id: this.currentAssignment.id },
       data: {
         status: 'CANCELLED',
@@ -548,7 +548,7 @@ class JobStatusFlowSimulator {
     
     if (jobIds.length > 0) {
       // Delete assignments
-      await prisma.assignment.deleteMany({
+      await prisma.assignments.deleteMany({
         where: { jobId: { in: jobIds } }
       });
       

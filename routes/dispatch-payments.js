@@ -54,7 +54,7 @@ router.post('/intent', async (req, res) => {
       });
     }
 
-    const settings = await prisma.companySettings.findUnique({
+    const settings = await prisma.company_settings.findUnique({
       where: { companyId },
       select: { defaultCurrency: true },
     });

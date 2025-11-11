@@ -1,8 +1,6 @@
 const express = require('express');
-const { PrismaClient } = require('@prisma/client');
 const { authenticateToken } = require('../../../middleware/auth');
-
-const prisma = new PrismaClient();
+const prisma = require('../../../lib/prisma');
 const router = express.Router();
 
 const toNumber = (value, fallback = null) => {
@@ -41,12 +39,12 @@ router.get('/:zoneId/tariffs', async (req, res) => {
       });
     }
 
-    const zone = await prisma.zone.findUnique({
+    const zone = await prisma.zones.findUnique({
       where: { id: zoneId },
       include: {
-        zoneTariffs: {
+        zone_tariffs: {
           include: {
-            tariff: true
+            tariffs: true
           },
           orderBy: {
             priority: 'asc'
@@ -65,13 +63,13 @@ router.get('/:zoneId/tariffs', async (req, res) => {
       });
     }
 
-    const tariffs = zone.zoneTariffs
+    const tariffs = zone.zone_tariffs
       .map((zt) => ({
         id: zt.tariffId,
         zoneTariffId: zt.id,
         priority: zt.priority,
         isDefault: zt.isDefault,
-        tariff: formatTariff(zt.tariff)
+        tariff: formatTariff(zt.tariffs)
       }))
       .filter((item) => item.tariff && item.tariff.isActive);
 
@@ -100,11 +98,11 @@ router.get('/refresh', async (req, res) => {
     const driverId = req.user.id;
     
     // Get driver with company information
-    const driver = await prisma.driver.findUnique({
+    const driver = await prisma.user.findUnique({
       where: { id: driverId },
       include: {
-        company: true
-      }
+        company: true,
+      },
     });
 
     if (!driver) {
@@ -124,20 +122,20 @@ router.get('/refresh', async (req, res) => {
     console.log(`🔄 Refreshing zones for driver ${driverId} in company ${driver.company.name}`);
 
     // Fetch all active zones for the company with tariffs
-    const zones = await prisma.zone.findMany({
+    const zones = await prisma.zones.findMany({
       where: {
         companyId: driver.companyId,
         isActive: true
       },
       include: {
-        zoneTariffs: {
+        zone_tariffs: {
           where: {
-            tariff: {
+            tariffs: {
               isActive: true
             }
           },
           include: {
-            tariff: {
+            tariffs: {
               select: {
                 id: true,
                 name: true,
@@ -170,8 +168,8 @@ router.get('/refresh', async (req, res) => {
       surgeMultiplier: toNumber(zone.surgeMultiplier, 1.0),
       isActive: zone.isActive,
       specialRules: zone.specialRules,
-      tariffCount: zone.zoneTariffs.length,
-      tariffs: zone.zoneTariffs.map(zt => ({
+      tariffCount: zone.zone_tariffs.length,
+      tariffs: zone.zone_tariffs.map(zt => ({
         zoneTariffId: zt.id,
         priority: zt.priority,
         isDefault: zt.isDefault,
@@ -180,7 +178,7 @@ router.get('/refresh', async (req, res) => {
         daysOfWeek: zt.daysOfWeek,
         timeFrom: zt.timeFrom,
         timeTo: zt.timeTo,
-        ...formatTariff(zt.tariff)
+        ...formatTariff(zt.tariffs)
       }))
     }));
 
@@ -216,7 +214,7 @@ router.get('/active', async (req, res) => {
   try {
     const driverId = req.user.id;
     
-    const driver = await prisma.driver.findUnique({
+    const driver = await prisma.user.findUnique({
       where: { id: driverId },
       select: { companyId: true }
     });
@@ -229,7 +227,7 @@ router.get('/active', async (req, res) => {
     }
 
     // Get only basic zone info for performance
-    const zones = await prisma.zone.findMany({
+    const zones = await prisma.zones.findMany({
       where: {
         companyId: driver.companyId,
         isActive: true
@@ -300,18 +298,16 @@ router.post('/select', async (req, res) => {
     }
 
     // Verify zone exists and belongs to driver's company
-    const zone = await prisma.zone.findFirst({
+    const zone = await prisma.zones.findFirst({
       where: {
         id: zoneId,
         companyId: driver.companyId,
         isActive: true
       },
       include: {
-        zoneTariffs: {
+        zone_tariffs: {
           include: {
-            tariff: {
-              where: { isActive: true }
-            }
+            tariffs: true,
           },
           orderBy: { priority: 'asc' }
         }
@@ -328,22 +324,22 @@ router.post('/select', async (req, res) => {
     // If tariffId is provided, verify it's valid for this zone
     let selectedTariff = null;
     if (tariffId) {
-      const zoneTariff = zone.zoneTariffs.find(zt => zt.tariff.id === tariffId);
+      const zoneTariff = zone.zone_tariffs.find(zt => zt.tariffs.id === tariffId);
       if (!zoneTariff) {
         return res.status(400).json({
           success: false,
           message: 'Selected tariff is not available for this zone'
         });
       }
-      selectedTariff = zoneTariff.tariff;
+      selectedTariff = zoneTariff.tariffs;
     } else {
       // Auto-select default tariff or first available
-      const defaultTariff = zone.zoneTariffs.find(zt => zt.isDefault);
-      selectedTariff = defaultTariff ? defaultTariff.tariff : zone.zoneTariffs[0]?.tariff;
+      const defaultTariff = zone.zone_tariffs.find(zt => zt.isDefault);
+      selectedTariff = defaultTariff ? defaultTariff.tariffs : zone.zone_tariffs[0]?.tariffs;
     }
 
     // Update or create driver preferences
-    const driverPreferences = await prisma.driverPreferences.upsert({
+    const driverPreferences = await prisma.driver_preferences.upsert({
       where: { driverId: driverId },
       create: {
         driverId: driverId,
@@ -359,20 +355,20 @@ router.post('/select', async (req, res) => {
     });
 
     // Get available tariffs for this zone
-    const availableTariffs = zone.zoneTariffs
-      .filter(zt => zt.tariff.isActive)
+    const availableTariffs = zone.zone_tariffs
+      .filter(zt => zt.tariffs?.isActive)
       .map(zt => ({
-        id: zt.tariff.id,
-        name: zt.tariff.name,
-        description: zt.tariff.description,
-        baseFare: toNumber(zt.tariff.baseFare, 0),
-        perKmRate: toNumber(zt.tariff.perKmRate, 0),
-        perMinuteRate: toNumber(zt.tariff.perMinuteRate, 0),
-        minimumFare: toNumber(zt.tariff.minimumFare, 0),
-        waitingFee: toNumber(zt.tariff.waitingFee, null),
-        airportFee: toNumber(zt.tariff.airportFee, null),
-        tollFee: toNumber(zt.tariff.tollFee, null),
-        extraStopFee: toNumber(zt.tariff.extraStopFee, null),
+        id: zt.tariffs.id,
+        name: zt.tariffs.name,
+        description: zt.tariffs.description,
+        baseFare: toNumber(zt.tariffs.baseFare, 0),
+        perKmRate: toNumber(zt.tariffs.perKmRate, 0),
+        perMinuteRate: toNumber(zt.tariffs.perMinuteRate, 0),
+        minimumFare: toNumber(zt.tariffs.minimumFare, 0),
+        waitingFee: toNumber(zt.tariffs.waitingFee, null),
+        airportFee: toNumber(zt.tariffs.airportFee, null),
+        tollFee: toNumber(zt.tariffs.tollFee, null),
+        extraStopFee: toNumber(zt.tariffs.extraStopFee, null),
         isDefault: zt.isDefault,
         priority: zt.priority
       }));
@@ -415,26 +411,24 @@ router.get('/current', async (req, res) => {
     const driverId = req.user.id;
 
     // Get driver preferences
-    const preferences = await prisma.driverPreferences.findUnique({
+    const preferences = await prisma.driver_preferences.findUnique({
       where: { driverId: driverId },
       include: {
-        selectedZone: {
+        zones: {
           include: {
-            zoneTariffs: {
+            zone_tariffs: {
               include: {
-                tariff: {
-                  where: { isActive: true }
-                }
+                tariffs: true,
               },
               orderBy: { priority: 'asc' }
             }
           }
         },
-        selectedTariff: true
+        tariffs: true
       }
     });
 
-    if (!preferences || !preferences.selectedZone) {
+    if (!preferences || !preferences.zones) {
       return res.json({
         success: true,
         data: null,
@@ -442,24 +436,24 @@ router.get('/current', async (req, res) => {
       });
     }
 
-    const zone = preferences.selectedZone;
-    const selectedTariff = preferences.selectedTariff;
+    const zone = preferences.zones;
+    const selectedTariff = preferences.tariffs;
 
     // Get available tariffs for current zone
-    const availableTariffs = zone.zoneTariffs
-      .filter(zt => zt.tariff.isActive)
+    const availableTariffs = zone.zone_tariffs
+      .filter(zt => zt.tariffs?.isActive)
       .map(zt => ({
-        id: zt.tariff.id,
-        name: zt.tariff.name,
-        description: zt.tariff.description,
-        baseFare: toNumber(zt.tariff.baseFare, 0),
-        perKmRate: toNumber(zt.tariff.perKmRate, 0),
-        perMinuteRate: toNumber(zt.tariff.perMinuteRate, 0),
-        minimumFare: toNumber(zt.tariff.minimumFare, 0),
-        waitingFee: toNumber(zt.tariff.waitingFee, null),
+        id: zt.tariffs.id,
+        name: zt.tariffs.name,
+        description: zt.tariffs.description,
+        baseFare: toNumber(zt.tariffs.baseFare, 0),
+        perKmRate: toNumber(zt.tariffs.perKmRate, 0),
+        perMinuteRate: toNumber(zt.tariffs.perMinuteRate, 0),
+        minimumFare: toNumber(zt.tariffs.minimumFare, 0),
+        waitingFee: toNumber(zt.tariffs.waitingFee, null),
         isDefault: zt.isDefault,
         priority: zt.priority,
-        isSelected: zt.tariff.id === selectedTariff?.id
+        isSelected: zt.tariffs.id === selectedTariff?.id
       }));
 
     return res.json({

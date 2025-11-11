@@ -1,4 +1,5 @@
 const express = require('express');
+const { randomUUID } = require('crypto');
 const prisma = require('../../../lib/prisma');
 const { authenticateToken } = require('../../../middleware/auth');
 
@@ -22,7 +23,7 @@ router.put('/', authenticateToken, async (req, res) => {
 
         // Validate inputs if provided
         if (vehicleId) {
-            const vehicle = await prisma.vehicle.findFirst({
+            const vehicle = await prisma.vehicles.findFirst({
                 where: {
                     id: vehicleId,
                     driverId: userId,
@@ -51,7 +52,7 @@ router.put('/', authenticateToken, async (req, res) => {
                 });
             }
 
-            const tariff = await prisma.tariff.findFirst({
+            const tariff = await prisma.tariffs.findFirst({
                 where: {
                     id: tariffId,
                     companyId: driver.companyId,
@@ -80,7 +81,7 @@ router.put('/', authenticateToken, async (req, res) => {
                 });
             }
 
-            const zone = await prisma.zone.findFirst({
+            const zone = await prisma.zones.findFirst({
                 where: {
                     id: zoneId,
                     companyId: driver.companyId,
@@ -97,20 +98,19 @@ router.put('/', authenticateToken, async (req, res) => {
         }
 
         // Upsert preferences
-        const preferences = await prisma.driverPreferences.upsert({
-            where: {
-                driverId: userId,
-            },
+        const preferences = await prisma.driver_preferences.upsert({
+            where: { driverId: userId },
             create: {
+                id: randomUUID(),
                 driverId: userId,
                 selectedZoneId: zoneId || null,
                 selectedTariffId: tariffId || null,
-                // Note: DriverPreferences schema doesn't have selectedVehicleId
-                // We'll need to add it or handle vehicles differently
+                updatedAt: new Date()
             },
             update: {
-                ...(zoneId !== undefined && { selectedZoneId: zoneId }),
-                ...(tariffId !== undefined && { selectedTariffId: tariffId }),
+                ...(zoneId !== undefined ? { selectedZoneId: zoneId } : {}),
+                ...(tariffId !== undefined ? { selectedTariffId: tariffId } : {}),
+                updatedAt: new Date()
             },
         });
 
@@ -139,7 +139,7 @@ router.get('/', authenticateToken, async (req, res) => {
     try {
         const { userId } = req.user;
 
-        const preferences = await prisma.driverPreferences.findUnique({
+        const preferences = await prisma.driver_preferences.findUnique({
             where: {
                 driverId: userId,
             },

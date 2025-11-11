@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
+const { randomUUID } = require('crypto');
 const jobService = require('../services/jobService');
 const pricingService = require('../services/pricingService');
 const trackingService = require('../services/trackingService');
@@ -386,8 +387,107 @@ const buildRoutePath = (job, pickupLocation, dropoffLocation, driverTrail) => {
   return fallback;
 };
 
+const dispatchJobInclude = {
+  users_jobs_customerIdTousers: {
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+      phone: true,
+      email: true,
+    },
+  },
+  users_jobs_assignedDriverIdTousers: {
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+      phone: true,
+      email: true,
+      preferences: true,
+      location_updates: {
+        orderBy: [
+          { timestamp: 'desc' },
+          { createdAt: 'desc' },
+        ],
+        take: 1,
+        select: {
+          latitude: true,
+          longitude: true,
+          heading: true,
+          timestamp: true,
+          createdAt: true,
+        },
+      },
+    },
+  },
+  offers: {
+    where: { status: 'SENT' },
+    select: {
+      id: true,
+      driverId: true,
+      status: true,
+    },
+  },
+  assignments: {
+    select: {
+      id: true,
+      driverId: true,
+      status: true,
+      assignedAt: true,
+    },
+  },
+  rides: {
+    select: {
+      id: true,
+      pickup: true,
+      destination: true,
+      route: true,
+    },
+  },
+  location_updates: {
+    orderBy: [
+      { timestamp: 'desc' },
+      { createdAt: 'desc' },
+    ],
+    take: 60,
+  },
+};
+
 const formatJobForDispatch = (job) => {
-  const { locationUpdates = [], trip = null, customer, assignedDriver } = job;
+  const rawLocationUpdates = job.locationUpdates || job.location_updates || [];
+  const rawTrip = job.trip || job.rides || null;
+  const rawCustomer = job.customer || job.users_jobs_customerIdTousers || null;
+  const rawAssignedDriver =
+    job.assignedDriver || job.users_jobs_assignedDriverIdTousers || null;
+
+  const locationUpdates = rawLocationUpdates;
+  const trip = rawTrip;
+
+  const customer = rawCustomer
+    ? {
+        id: rawCustomer.id,
+        firstName: rawCustomer.firstName,
+        lastName: rawCustomer.lastName,
+        phone: rawCustomer.phone,
+        email: rawCustomer.email,
+      }
+    : null;
+
+  const assignedDriver = rawAssignedDriver
+    ? {
+        id: rawAssignedDriver.id,
+        firstName: rawAssignedDriver.firstName,
+        lastName: rawAssignedDriver.lastName,
+        phone: rawAssignedDriver.phone,
+        email: rawAssignedDriver.email,
+        preferences: rawAssignedDriver.preferences,
+        locationUpdates:
+          rawAssignedDriver.locationUpdates ||
+          rawAssignedDriver.location_updates ||
+          [],
+      }
+    : null;
   const requirements = parseJsonField(job.requirements, {}) || {};
 
   const tripPickup = parseRideLocation(trip?.pickup);
@@ -523,6 +623,7 @@ const formatJobForDispatch = (job) => {
   }
 
   delete formattedJob.locationUpdates;
+  delete formattedJob.location_updates;
 
   return formattedJob;
 };
@@ -558,21 +659,21 @@ const formatZoneForDispatch = (zone) => {
 
   const color = boundaries.color || zone.color || '#4F46E5';
 
-  const zoneTariffs = (zone.zoneTariffs || []).map((zt) => ({
+  const zoneTariffs = (zone.zone_tariffs || zone.zoneTariffs || []).map((zt) => ({
     id: zt.id,
     tariffId: zt.tariffId,
     zoneId: zt.zoneId,
     priority: zt.priority,
     isDefault: zt.isDefault,
-    tariff: zt.tariff
+    tariff: zt.tariff || zt.tariffs
       ? {
-        id: zt.tariff.id,
-        name: zt.tariff.name,
-        baseFare: Number(zt.tariff.baseFare ?? 0),
-        perKmRate: Number(zt.tariff.perKmRate ?? 0),
-        perMinuteRate: Number(zt.tariff.perMinuteRate ?? 0),
-        minimumFare: Number(zt.tariff.minimumFare ?? 0),
-        isActive: zt.tariff.isActive,
+        id: (zt.tariff || zt.tariffs).id,
+        name: (zt.tariff || zt.tariffs).name,
+        baseFare: Number((zt.tariff || zt.tariffs).baseFare ?? 0),
+        perKmRate: Number((zt.tariff || zt.tariffs).perKmRate ?? 0),
+        perMinuteRate: Number((zt.tariff || zt.tariffs).perMinuteRate ?? 0),
+        minimumFare: Number((zt.tariff || zt.tariffs).minimumFare ?? 0),
+        isActive: (zt.tariff || zt.tariffs).isActive,
       }
       : null,
   }));
@@ -631,6 +732,136 @@ const mapJobStatusToCounter = (normalizedStatus) => {
   }
 };
 
+const recallJobToQueue = async ({
+  jobId,
+  actorId,
+  reason,
+  dispatchNamespace,
+  driverNamespace,
+}) => {
+  const timestamp = new Date();
+  const recallReason = reason || 'Job recalled';
+
+  const jobRecord = await prisma.job.findUnique({
+    where: { id: jobId },
+    include: {
+      users_jobs_customerIdTousers: {
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          phone: true,
+        },
+      },
+    },
+  });
+
+  if (!jobRecord) {
+    throw new Error('Job not found');
+  }
+
+  const updatedJob = await prisma.job.update({
+    where: { id: jobId },
+    data: {
+      status: 'UNASSIGNED',
+      assignedDriverId: null,
+      updatedAt: timestamp,
+    },
+    include: {
+      users_jobs_customerIdTousers: {
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          phone: true,
+        },
+      },
+    },
+  });
+
+  await prisma.assignments.updateMany({
+    where: {
+      jobId,
+      ...(jobRecord.assignedDriverId ? { driverId: jobRecord.assignedDriverId } : {}),
+    },
+    data: {
+      status: 'CANCELLED',
+      rejectionReason: 'RECALLED',
+      respondedAt: timestamp,
+      updatedAt: timestamp,
+    },
+  });
+
+  if (jobRecord.assignedDriverId) {
+    await prisma.user.update({
+      where: { id: jobRecord.assignedDriverId },
+      data: {
+        preferences: {
+          driverStatus: 'AVAILABLE',
+          lastStatusChange: timestamp.toISOString(),
+        },
+      },
+    });
+  }
+
+  const dispatchPayload = {
+    jobId: jobRecord.jobId || jobRecord.id,
+    internalJobId: jobRecord.id,
+    driverId: jobRecord.assignedDriverId,
+    status: 'UNASSIGNED',
+    progressStatus: 'RECALLED',
+    reason: recallReason,
+    timestamp: timestamp.toISOString(),
+    companyId: jobRecord.companyId,
+  };
+
+  const jobPlain = JSON.parse(JSON.stringify(updatedJob));
+  const jobPayload = {
+    job: {
+      ...jobPlain,
+      progressStatus: 'RECALLED',
+      fullRawData: jobPlain,
+    },
+  };
+
+  const driverStatusPayload = jobRecord.assignedDriverId
+    ? {
+        driverId: jobRecord.assignedDriverId,
+        status: 'AVAILABLE',
+        timestamp: timestamp.toISOString(),
+      }
+    : null;
+
+  const dispatchRooms = [
+    `dispatch_${jobRecord.companyId}`,
+    `company_${jobRecord.companyId}`,
+    'super_admin',
+  ];
+
+  dispatchRooms.forEach((room) => {
+    dispatchNamespace?.to(room).emit('job:recalled', dispatchPayload);
+    dispatchNamespace?.to(room).emit('job:progress:updated', dispatchPayload);
+    dispatchNamespace?.to(room).emit('job:updated', jobPayload);
+    dispatchNamespace?.to(room).emit('job:data:updated', jobPayload);
+    if (driverStatusPayload) {
+      dispatchNamespace?.to(room).emit('driver:status:updated', driverStatusPayload);
+    }
+  });
+
+  if (driverNamespace && jobRecord.assignedDriverId) {
+    driverNamespace.to(`driver_${jobRecord.assignedDriverId}`).emit('job:recalled', dispatchPayload);
+  }
+
+  const normalizedJob = {
+    ...updatedJob,
+    customer: updatedJob.users_jobs_customerIdTousers ?? null,
+  };
+  delete normalizedJob.users_jobs_customerIdTousers;
+
+  console.log(`↩️ Job ${jobId} recalled by ${actorId} - returned to UNASSIGNED`);
+  return normalizedJob;
+};
+
 // ═══════════════════════════════════════════════════════════
 // Dispatch Support Endpoints
 // ═══════════════════════════════════════════════════════════
@@ -643,12 +874,12 @@ router.get(
     try {
       const { companyId } = req.user;
 
-      let settings = await prisma.companySettings.findUnique({
+      let settings = await prisma.company_settings.findUnique({
         where: { companyId },
       });
 
       if (!settings) {
-        settings = await prisma.companySettings.create({
+        settings = await prisma.company_settings.create({
           data: {
             companyId,
             mapProvider: 'OPENSTREETMAP',
@@ -721,7 +952,7 @@ const getDispatchDriversHandler = async (req, res) => {
             take: 1,
             select: { jobId: true },
           },
-          locationUpdates: {
+          location_updates: {
             orderBy: [{ timestamp: 'desc' }, { createdAt: 'desc' }],
             take: 1,
             select: {
@@ -736,7 +967,7 @@ const getDispatchDriversHandler = async (req, res) => {
         },
         take: 150,
       }),
-      prisma.zone.findMany({
+      prisma.zones.findMany({
         where: {
           isActive: true,
           ...companyFilter,
@@ -798,7 +1029,10 @@ const getDispatchDriversHandler = async (req, res) => {
 
       const latestShift = driver.shifts[0] || null;
       const activeAssignment = driver.assignments[0] || null;
-      const latestLocation = driver.locationUpdates[0] || null;
+      const latestLocation =
+        (driver.locationUpdates && driver.locationUpdates[0]) ||
+        (driver.location_updates && driver.location_updates[0]) ||
+        null;
 
       let statusHint = dispatchMeta.status || null;
       if (!statusHint && latestShift?.status) {
@@ -990,72 +1224,7 @@ const getDispatchJobsHandler = async (req, res) => {
         companyId,
         ...(statusFilter ? { status: statusFilter } : {}),
       },
-      include: {
-        customer: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-            phone: true,
-            email: true, // 🚨 ADD EMAIL TO QUERY
-          },
-        },
-        assignedDriver: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-            phone: true,
-            email: true,
-            preferences: true,
-            locationUpdates: {
-              orderBy: [
-                { timestamp: 'desc' },
-                { createdAt: 'desc' },
-              ],
-              take: 1,
-              select: {
-                latitude: true,
-                longitude: true,
-                heading: true,
-                timestamp: true,
-                createdAt: true,
-              },
-            },
-          },
-        },
-        offers: {
-          where: { status: 'SENT' },
-          select: {
-            id: true,
-            driverId: true,
-            status: true,
-          },
-        },
-        assignments: {
-          select: {
-            id: true,
-            driverId: true,
-            status: true,
-            assignedAt: true,
-          },
-        },
-        trip: {
-          select: {
-            id: true,
-            pickup: true,
-            destination: true,
-            route: true,
-          },
-        },
-        locationUpdates: {
-          orderBy: [
-            { timestamp: 'desc' },
-            { createdAt: 'desc' },
-          ],
-          take: 60,
-        },
-      },
+      include: dispatchJobInclude,
       orderBy: { createdAt: 'desc' },
       take: parseInt(limit, 10),
     });
@@ -1159,12 +1328,12 @@ router.get(
     try {
       const companyId = req.user.companyId;
 
-      const zones = await prisma.zone.findMany({
+      const zones = await prisma.zones.findMany({
         where: { companyId },
         include: {
-          zoneTariffs: {
+          zone_tariffs: {
             include: {
-              tariff: true,
+              tariffs: true,
             },
           },
         },
@@ -1194,7 +1363,7 @@ router.get(
     try {
       const companyId = req.user.companyId;
 
-      const tariffs = await prisma.tariff.findMany({
+      const tariffs = await prisma.tariffs.findMany({
         where: { companyId },
         orderBy: { createdAt: 'desc' },
       });
@@ -1229,14 +1398,22 @@ router.get(
   authorizeRoles(...allowedDispatchRoles),
   async (req, res) => {
     try {
-      const vehicleTypes = await prisma.vehicleTypeMaster.findMany({
+      const vehicleTypes = await prisma.vehicle_types.findMany({
         where: { isActive: true },
         orderBy: { name: 'asc' },
       });
 
       res.json({
         success: true,
-        data: vehicleTypes,
+        data: vehicleTypes.map((type) => ({
+          id: type.id,
+          name: type.name,
+          code: type.code,
+          description: type.description,
+          capacity: type.capacity,
+          icon: type.icon,
+          isActive: type.isActive,
+        })),
       });
     } catch (error) {
       console.error('Error fetching vehicle types:', error);
@@ -1404,6 +1581,7 @@ router.post('/jobs', authenticateToken, authorizeRoles(...allowedDispatchRoles),
 
       const createdPassenger = await prisma.user.create({
         data: {
+          id: randomUUID(),
           firstName,
           lastName,
           email: fallbackEmail,
@@ -1413,6 +1591,7 @@ router.post('/jobs', authenticateToken, authorizeRoles(...allowedDispatchRoles),
           isActive: true,
           isVerified: false,
           companyId: resolvedCompanyId,
+          updatedAt: new Date(),
         },
         select: { id: true },
       });
@@ -1519,17 +1698,10 @@ router.post('/jobs', authenticateToken, authorizeRoles(...allowedDispatchRoles),
     if (driverId && driverAssignment && driverAssignment.toLowerCase() === 'manual') {
       const io = req.io;
       await jobService.assignDriver(job.id, driverId, req.user.id, io);
-      job = await prisma.job.findUnique({
-        where: { id: job.id },
-        include: {
-          customer: true,
-          assignedDriver: true,
-        },
-      }) || job;
     }
 
     if (verifiedPaymentIntentId && job.tripId) {
-      await prisma.ride.update({
+      await prisma.rides.update({
         where: { id: job.tripId },
         data: {
           paymentStatus: 'PAID',
@@ -1539,10 +1711,16 @@ router.post('/jobs', authenticateToken, authorizeRoles(...allowedDispatchRoles),
       });
     }
 
+    const hydratedJob = await prisma.job.findUnique({
+      where: { id: job.id },
+      include: dispatchJobInclude,
+    });
+    const formattedJob = hydratedJob ? formatJobForDispatch(hydratedJob) : formatJobForDispatch(job);
+
     res.status(201).json({
       success: true,
       data: {
-        job,
+        job: formattedJob,
         priceBreakdown: priceEstimate,
       }
     });
@@ -1648,7 +1826,29 @@ router.patch('/jobs/:jobId/status',
   async (req, res) => {
     try {
       const { jobId } = req.params;
-      const { status, location } = req.body;
+      const { status, location, reason } = req.body;
+      const normalizedStatus =
+        typeof status === 'string' ? status.replace(/-/g, '_').trim().toUpperCase() : null;
+
+      if (normalizedStatus === 'RECALL' || normalizedStatus === 'RECALLED') {
+        const dispatchNamespace =
+          req.dispatchNamespace || global.dispatchNamespace || null;
+        const driverNamespace = req.driverNamespace || global.driverNamespace || null;
+
+        const job = await recallJobToQueue({
+          jobId,
+          actorId: req.user.id,
+          reason,
+          dispatchNamespace,
+          driverNamespace,
+        });
+
+        return res.json({
+          success: true,
+          data: job,
+          message: 'Job recalled and returned to queue',
+        });
+      }
 
       const job = await jobService.updateJobStatus(
         jobId,
@@ -1856,9 +2056,6 @@ router.post('/jobs/:jobId/cancel',
       // Get job details before cancellation to know which driver to notify
       const jobBeforeCancel = await prisma.job.findUnique({
         where: { id: jobId },
-        include: {
-          assignedDriver: true,
-        }
       });
 
       // Update job status to CANCELLED
@@ -1944,22 +2141,17 @@ router.patch(
         validationCode,
         currency,
         // Driver assignment
-        driverAssignment,
-        driverId,
-      } = req.body || {};
+      driverAssignment,
+      driverId,
+    } = req.body || {};
 
-      const job = await prisma.job.findUnique({
-        where: { id: jobId },
-        include: {
-          customer: true,
-          assignedDriver: true,
-          trip: true,
-        },
-      });
+    const job = await prisma.job.findUnique({
+      where: { id: jobId },
+    });
 
-      if (!job) {
-        return res.status(404).json({
-          success: false,
+    if (!job) {
+      return res.status(404).json({
+        success: false,
           error: 'Job not found',
         });
       }
@@ -1982,8 +2174,13 @@ router.patch(
       if (driverAssignment !== undefined) {
         if (driverAssignment === 'manual' && driverId) {
           // Assign to specific driver
-          const driver = await prisma.driver.findUnique({
-            where: { id: driverId }
+          const driver = await prisma.user.findFirst({
+            where: {
+              id: driverId,
+              role: 'DRIVER',
+              companyId: job.companyId,
+            },
+            select: { id: true },
           });
           
           if (!driver) {
@@ -2195,19 +2392,33 @@ router.patch(
       updates.requirements = existingRequirements;
 
       const updatedJob = await jobService.updateJobDetails(jobId, updates);
+
+      const refreshedJob = await prisma.job.findUnique({
+        where: { id: jobId },
+        include: dispatchJobInclude,
+      });
+      const normalizedJob = refreshedJob
+        ? formatJobForDispatch(refreshedJob)
+        : updatedJob
+          ? formatJobForDispatch(updatedJob)
+          : null;
+
+      if (!normalizedJob) {
+        throw new Error('Job updated but formatted data could not be generated');
+      }
       
       // Emit update to dispatch room
       if (req.io) {
         req.io.to('dispatch').emit('job:data:updated', {
           jobId: jobId,
-          updates: updatedJob,
+          updates: normalizedJob,
           timestamp: new Date().toISOString()
         });
       }
 
       res.json({
         success: true,
-        data: updatedJob,
+        data: normalizedJob,
         message: 'Job updated successfully',
       });
     } catch (error) {
@@ -2229,75 +2440,59 @@ router.get('/tracking/:jobId',
       const { jobId } = req.params;
 
       // Get job with tracking information
-      const job = await prisma.job.findUnique({
+      const jobRecord = await prisma.job.findUnique({
         where: { id: jobId },
         include: {
-          customer: {
-            select: {
-              id: true,
-              firstName: true,
-              lastName: true,
-              phone: true,
-            }
-          },
-          assignedDriver: {
-            select: {
-              id: true,
-              firstName: true,
-              lastName: true,
-              phone: true,
-              email: true,
-              preferences: true,
-              locationUpdates: {
-                orderBy: [
-                  { timestamp: 'desc' },
-                  { createdAt: 'desc' },
-                ],
-                take: 1,
-                select: {
-                  latitude: true,
-                  longitude: true,
-                  heading: true,
-                  timestamp: true,
-                  createdAt: true,
-                },
-              },
-            }
-          },
-          locationUpdates: {
-            orderBy: { timestamp: 'desc' },
-            take: 20
-          },
-          company: {
+          ...dispatchJobInclude,
+          companies: {
             select: {
               id: true,
               brandName: true,
               legalName: true,
-            }
-          }
+            },
+          },
+          location_updates: {
+            orderBy: { timestamp: 'desc' },
+            take: 20,
+          },
         }
       });
 
-      if (!job) {
+      if (!jobRecord) {
         return res.status(404).json({
           success: false,
           error: 'Job not found'
         });
       }
 
+      const company = jobRecord.companies
+        ? {
+          id: jobRecord.companies.id,
+          brandName: jobRecord.companies.brandName,
+          legalName: jobRecord.companies.legalName,
+        }
+        : null;
+      const formattedJob = formatJobForDispatch(jobRecord);
+      if (company) {
+        formattedJob.company = company;
+      }
+
+      const assignedDriverRecord = jobRecord.users_jobs_assignedDriverIdTousers || null;
       const latestDriverLocation =
-        job.assignedDriver?.locationUpdates &&
-          job.assignedDriver.locationUpdates.length
-          ? job.assignedDriver.locationUpdates[0]
+        assignedDriverRecord?.location_updates &&
+        assignedDriverRecord.location_updates.length
+          ? assignedDriverRecord.location_updates[0]
           : null;
-      const driverPrefs = cloneJson(job.assignedDriver?.preferences);
+      const driverPrefs = cloneJson(assignedDriverRecord?.preferences);
       const fallbackLocation = driverPrefs.lastLocation || {};
+
+      const locationHistory = jobRecord.location_updates || [];
 
       res.json({
         success: true,
         data: {
-          job,
-          currentLocation: job.assignedDriver ? {
+          job: formattedJob,
+          currentLocation: assignedDriverRecord ? {
             latitude: toNumber(
               latestDriverLocation?.latitude,
               fallbackLocation.latitude
@@ -2317,7 +2512,7 @@ router.get('/tracking/:jobId',
               Date.now()
             )
           } : null,
-          locationHistory: job.locationUpdates
+          locationHistory,
         }
       });
 
@@ -2416,7 +2611,7 @@ router.get('/drivers',
       
       const vehicleTypeIcons = {};
       if (uniqueVehicleTypes.length > 0) {
-        const vehicleTypeMasters = await prisma.vehicleTypeMaster.findMany({
+        const vehicleTypeMasters = await prisma.vehicle_types.findMany({
           where: {
             code: { in: uniqueVehicleTypes }
           },

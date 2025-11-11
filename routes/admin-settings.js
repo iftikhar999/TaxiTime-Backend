@@ -1,6 +1,7 @@
 const express = require('express');
 const { PrismaClient } = require('@prisma/client');
 const { authenticateToken, authorizeRoles } = require('../middleware/auth');
+const { createId } = require('@paralleldrive/cuid2');
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -84,7 +85,7 @@ router.put('/', async (req, res) => {
 // GET /api/admin/settings/companies - Get company-specific settings
 router.get('/companies', async (req, res) => {
     try {
-        const companies = await prisma.company.findMany({
+        const companies = await prisma.companies.findMany({
             select: {
                 id: true,
                 legalName: true,
@@ -92,7 +93,7 @@ router.get('/companies', async (req, res) => {
                 name: true,
                 isActive: true,
                 commissionRate: true,
-                settings: {
+                company_settings: {
                     select: {
                         mapProvider: true,
                         locationUpdateInterval: true,
@@ -103,7 +104,13 @@ router.get('/companies', async (req, res) => {
             orderBy: { legalName: 'asc' }
         });
 
-        res.json(companies);
+        // Transform for frontend
+        const transformedCompanies = companies.map(company => ({
+            ...company,
+            settings: company.company_settings || null
+        }));
+
+        res.json(transformedCompanies);
     } catch (error) {
         console.error('Error fetching company settings:', error);
         res.status(500).json({ error: 'Failed to fetch company settings' });
@@ -116,7 +123,7 @@ router.put('/companies/:id', async (req, res) => {
         const { id } = req.params;
         const { commissionRate, settings, isActive, mapProvider, locationUpdateInterval, heartbeatInterval } = req.body;
 
-        const company = await prisma.company.update({
+        const company = await prisma.companies.update({
             where: { id },
             data: {
                 commissionRate: commissionRate ? parseFloat(commissionRate) : undefined,
@@ -130,7 +137,7 @@ router.put('/companies/:id', async (req, res) => {
                 name: true,
                 isActive: true,
                 commissionRate: true,
-                settings: true
+                company_settings: true
             }
         });
 
@@ -156,30 +163,45 @@ router.put('/companies/:id', async (req, res) => {
                 });
             }
 
-            const companySettings = await prisma.companySettings.upsert({
+            const companySettings = await prisma.company_settings.upsert({
                 where: { companyId: id },
                 update: {
                     mapProvider: mapProvider || undefined,
                     locationUpdateInterval: locationUpdateInterval ? parseInt(locationUpdateInterval) : undefined,
-                    heartbeatInterval: heartbeatInterval ? parseInt(heartbeatInterval) : undefined
+                    heartbeatInterval: heartbeatInterval ? parseInt(heartbeatInterval) : undefined,
+                    updatedAt: new Date()
                 },
                 create: {
+                    id: createId(),
                     companyId: id,
                     mapProvider: mapProvider || 'NATIVE',
                     locationUpdateInterval: locationUpdateInterval ? parseInt(locationUpdateInterval) : 2,
-                    heartbeatInterval: heartbeatInterval ? parseInt(heartbeatInterval) : 30
+                    heartbeatInterval: heartbeatInterval ? parseInt(heartbeatInterval) : 30,
+                    updatedAt: new Date()
                 }
             });
 
+            // Transform for frontend
+            const response = {
+                ...company,
+                settings: companySettings
+            };
+
             res.json({
                 message: 'Company settings updated successfully',
-                company,
+                company: response,
                 companySettings
             });
         } else {
+            // Transform for frontend
+            const response = {
+                ...company,
+                settings: company.company_settings || null
+            };
+
             res.json({
                 message: 'Company settings updated successfully',
-                company
+                company: response
             });
         }
     } catch (error) {

@@ -1,49 +1,20 @@
 const express = require('express');
-const { PrismaClient } = require('@prisma/client');
+const { v4: uuidv4 } = require('uuid');
+const prisma = require('../lib/prisma');
 const { authenticateToken, authorizeRoles } = require('../middleware/auth');
+const { companyMiddleware } = require('../middleware/company');
 
-const prisma = new PrismaClient();
+
 const router = express.Router();
 
 router.use(authenticateToken);
-router.use(authorizeRoles('OWNER', 'COMPANY_ADMIN'));
-
-// Scope to company middleware
-const scopeToCompany = async (req, res, next) => {
-    try {
-        const user = await prisma.user.findUnique({
-            where: { id: req.user.id },
-            include: {
-                ownedCompany: true,
-                company: true
-            }
-        });
-
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-
-        if (user.role === 'OWNER' && user.ownedCompany) {
-            req.companyId = user.ownedCompany.id;
-        } else if (user.role === 'COMPANY_ADMIN' && user.companyId) {
-            req.companyId = user.companyId;
-        } else {
-            return res.status(403).json({ error: 'User not associated with a company' });
-        }
-
-        next();
-    } catch (error) {
-        console.error('Company scope error:', error);
-        res.status(500).json({ error: 'Internal server error' });
-    }
-};
-
-router.use(scopeToCompany);
+router.use(authorizeRoles('OWNER', 'COMPANY_ADMIN', 'ADMIN', 'SUPER_ADMIN'));
+router.use(companyMiddleware);
 
 // GET /api/owner/tariffs-simplified - Get all tariffs (simplified structure)
 router.get('/', async (req, res) => {
     try {
-        const tariffs = await prisma.tariff.findMany({
+        const tariffs = await prisma.tariffs.findMany({
             where: { companyId: req.companyId },
             include: {
                 zoneTariffs: {
@@ -77,7 +48,7 @@ router.get('/', async (req, res) => {
 // GET /api/owner/tariffs-simplified/:tariffId - Get single tariff
 router.get('/:tariffId', async (req, res) => {
     try {
-        const tariff = await prisma.tariff.findFirst({
+        const tariff = await prisma.tariffs.findFirst({
             where: {
                 id: req.params.tariffId,
                 companyId: req.companyId
@@ -136,8 +107,9 @@ router.post('/', async (req, res) => {
             });
         }
 
-        const tariff = await prisma.tariff.create({
+        const tariff = await prisma.tariffs.create({
             data: {
+                id: uuidv4(),
                 name,
                 description,
                 baseFare: parseFloat(baseFare),
@@ -148,7 +120,8 @@ router.post('/', async (req, res) => {
                 airportFee: parseFloat(airportFee) || 0,
                 tollFee: parseFloat(tollFee) || 0,
                 extraStopFee: parseFloat(extraStopFee) || 0,
-                companyId: req.companyId
+                companyId: req.companyId,
+                updatedAt: new Date()
             }
         });
 
@@ -175,7 +148,7 @@ router.put('/:tariffId', async (req, res) => {
             extraStopFee
         } = req.body;
 
-        const tariff = await prisma.tariff.findFirst({
+        const tariff = await prisma.tariffs.findFirst({
             where: {
                 id: req.params.tariffId,
                 companyId: req.companyId
@@ -186,7 +159,7 @@ router.put('/:tariffId', async (req, res) => {
             return res.status(404).json({ error: 'Tariff not found' });
         }
 
-        const updatedTariff = await prisma.tariff.update({
+        const updatedTariff = await prisma.tariffs.update({
             where: { id: req.params.tariffId },
             data: {
                 ...(name && { name }),
@@ -213,7 +186,7 @@ router.put('/:tariffId', async (req, res) => {
 // DELETE /api/owner/tariffs-simplified/:tariffId - Delete tariff
 router.delete('/:tariffId', async (req, res) => {
     try {
-        const tariff = await prisma.tariff.findFirst({
+        const tariff = await prisma.tariffs.findFirst({
             where: {
                 id: req.params.tariffId,
                 companyId: req.companyId
@@ -225,12 +198,12 @@ router.delete('/:tariffId', async (req, res) => {
         }
 
         // Delete zone-tariff relationships first
-        await prisma.zoneTariff.deleteMany({
+        await prisma.zone_tariffs.deleteMany({
             where: { tariffId: req.params.tariffId }
         });
 
         // Delete tariff
-        await prisma.tariff.delete({
+        await prisma.tariffs.delete({
             where: { id: req.params.tariffId }
         });
 
@@ -244,7 +217,7 @@ router.delete('/:tariffId', async (req, res) => {
 // POST /api/owner/tariffs-simplified/:tariffId/toggle - Toggle tariff active status
 router.post('/:tariffId/toggle', async (req, res) => {
     try {
-        const tariff = await prisma.tariff.findFirst({
+        const tariff = await prisma.tariffs.findFirst({
             where: {
                 id: req.params.tariffId,
                 companyId: req.companyId
@@ -257,7 +230,7 @@ router.post('/:tariffId/toggle', async (req, res) => {
 
         // For now, we'll use a boolean field or create one
         // Since the schema might not have isActive, let's check and update based on what exists
-        const updatedTariff = await prisma.tariff.update({
+        const updatedTariff = await prisma.tariffs.update({
             where: { id: req.params.tariffId },
             data: {
                 // Toggle logic - we'll need to check what field exists in schema

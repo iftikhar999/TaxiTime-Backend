@@ -1,12 +1,11 @@
 const express = require('express');
-const { PrismaClient } = require('@prisma/client');
 const bcrypt = require('bcryptjs');
 const multer = require('multer');
 const path = require('path');
 const { authenticateToken } = require('../../../middleware/auth');
+const prisma = require('../../../lib/prisma');
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
@@ -43,33 +42,31 @@ router.get('/', authenticateToken, async (req, res) => {
             where: { id: driverId },
             select: {
                 id: true,
-                firstName: true, // ✅ FIX: Use firstName instead of name
-                lastName: true, // ✅ FIX: Add lastName
+                firstName: true,
+                lastName: true,
                 email: true,
-                phone: true, // ✅ FIX: Use phone instead of phoneNumber
-                avatar: true, // ✅ FIX: Use avatar instead of profilePicture
+                phone: true,
+                avatar: true,
                 address: true,
                 rating: true,
                 isActive: true,
                 isVerified: true,
                 createdAt: true,
                 lastLoginAt: true,
-                companyId: true, // ✅ CRITICAL: Include companyId
-                company: {
+                companyId: true,
+                companies_users_companyIdTocompanies: {
                     select: {
                         id: true,
-                        legalName: true, // ✅ FIX: Use legalName instead of name
-                        brandName: true, // ✅ FIX: Add brandName
-                        hqAddressLine1: true, // ✅ FIX: Use correct address field
+                        legalName: true,
+                        brandName: true,
+                        hqAddressLine1: true,
                         hqCity: true,
                         hqState: true,
-                        primaryContactPhone: true, // ✅ FIX: Use correct phone field
-                        supportPhone: true
-                    }
-                }
-                // ⚠️ NOTE: User model doesn't have direct vehicle relation
-                // Vehicles are managed through shifts or CompanyDriver relation
-            }
+                        primaryContactPhone: true,
+                        supportPhone: true,
+                    },
+                },
+            },
         });
 
         if (!driver) {
@@ -90,16 +87,20 @@ router.get('/', authenticateToken, async (req, res) => {
             isVerified: driver.isVerified,
             createdAt: driver.createdAt,
             lastLoginAt: driver.lastLoginAt,
-            companyId: driver.companyId || driver.company?.id, // ✅ CRITICAL: Ensure companyId is present
-            company: driver.company ? {
-                id: driver.company.id,
-                name: driver.company.legalName || driver.company.brandName, // ✅ FIX: Map legalName/brandName to name
-                legalName: driver.company.legalName,
-                brandName: driver.company.brandName,
-                address: driver.company.hqAddressLine1, // ✅ FIX: Map hqAddressLine1 to address
-                city: driver.company.hqCity,
-                state: driver.company.hqState,
-                phone: driver.company.primaryContactPhone || driver.company.supportPhone // ✅ FIX: Map phone fields
+            companyId: driver.companyId || driver.companies_users_companyIdTocompanies?.id,
+            company: driver.companies_users_companyIdTocompanies ? {
+                id: driver.companies_users_companyIdTocompanies.id,
+                name:
+                    driver.companies_users_companyIdTocompanies.legalName ||
+                    driver.companies_users_companyIdTocompanies.brandName,
+                legalName: driver.companies_users_companyIdTocompanies.legalName,
+                brandName: driver.companies_users_companyIdTocompanies.brandName,
+                address: driver.companies_users_companyIdTocompanies.hqAddressLine1,
+                city: driver.companies_users_companyIdTocompanies.hqCity,
+                state: driver.companies_users_companyIdTocompanies.hqState,
+                phone:
+                    driver.companies_users_companyIdTocompanies.primaryContactPhone ||
+                    driver.companies_users_companyIdTocompanies.supportPhone,
             } : null
         };
 
@@ -128,29 +129,20 @@ router.put('/', authenticateToken, async (req, res) => {
     try {
         const driverId = req.user.id;
         const {
-            name,
+            firstName,
+            lastName,
             email,
-            phoneNumber,
-            dateOfBirth,
+            phone,
             address,
-            city,
-            state,
-            zipCode,
-            country,
-            emergencyContactName,
-            emergencyContactPhone,
-            bankAccountNumber,
-            bankName,
-            bankRoutingNumber
-        } = req.body;
+            rating,
+        } = req.body || {};
 
-        // Validate email uniqueness if provided
         if (email) {
             const existingUser = await prisma.user.findFirst({
                 where: {
-                    email,
-                    id: { not: driverId }
-                }
+                    email: email.toLowerCase(),
+                    NOT: { id: driverId },
+                },
             });
 
             if (existingUser) {
@@ -158,13 +150,12 @@ router.put('/', authenticateToken, async (req, res) => {
             }
         }
 
-        // Validate phone number uniqueness if provided
-        if (phoneNumber) {
+        if (phone) {
             const existingUser = await prisma.user.findFirst({
                 where: {
-                    phoneNumber,
-                    id: { not: driverId }
-                }
+                    phone,
+                    NOT: { id: driverId },
+                },
             });
 
             if (existingUser) {
@@ -173,52 +164,39 @@ router.put('/', authenticateToken, async (req, res) => {
         }
 
         const updateData = {};
-        if (name) updateData.name = name;
-        if (email) updateData.email = email;
-        if (phoneNumber) updateData.phoneNumber = phoneNumber;
-        if (dateOfBirth) updateData.dateOfBirth = new Date(dateOfBirth);
-        if (address) updateData.address = address;
-        if (city) updateData.city = city;
-        if (state) updateData.state = state;
-        if (zipCode) updateData.zipCode = zipCode;
-        if (country) updateData.country = country;
-        if (emergencyContactName) updateData.emergencyContactName = emergencyContactName;
-        if (emergencyContactPhone) updateData.emergencyContactPhone = emergencyContactPhone;
-        if (bankAccountNumber) updateData.bankAccountNumber = bankAccountNumber;
-        if (bankName) updateData.bankName = bankName;
-        if (bankRoutingNumber) updateData.bankRoutingNumber = bankRoutingNumber;
+        if (firstName !== undefined) updateData.firstName = String(firstName).trim();
+        if (lastName !== undefined) updateData.lastName = String(lastName).trim();
+        if (email !== undefined) updateData.email = String(email).trim().toLowerCase();
+        if (phone !== undefined) updateData.phone = String(phone).trim();
+        if (address !== undefined) updateData.address = address;
+        if (rating !== undefined) updateData.rating = rating;
+        updateData.updatedAt = new Date();
 
         const updatedDriver = await prisma.user.update({
             where: { id: driverId },
             data: updateData,
             select: {
                 id: true,
-                name: true,
+                firstName: true,
+                lastName: true,
                 email: true,
-                phoneNumber: true,
+                phone: true,
                 address: true,
-                city: true,
-                state: true,
-                zipCode: true,
-                country: true,
-                emergencyContactName: true,
-                emergencyContactPhone: true,
-                bankName: true,
-                updatedAt: true
-            }
+                rating: true,
+                updatedAt: true,
+            },
         });
 
         res.json({
             success: true,
             message: 'Profile updated successfully',
-            data: updatedDriver
+            data: updatedDriver,
         });
-
     } catch (error) {
         console.error('Error updating driver profile:', error);
         res.status(500).json({
             error: 'Failed to update driver profile',
-            details: error.message
+            details: error.message,
         });
     }
 });
@@ -294,23 +272,23 @@ router.post('/picture', authenticateToken, upload.single('profilePicture'), asyn
 
         const profilePicturePath = `/uploads/driver-documents/${req.file.filename}`;
 
-        // Update driver profile picture
         const updatedDriver = await prisma.user.update({
             where: { id: driverId },
-            data: { profilePicture: profilePicturePath },
+            data: { avatar: profilePicturePath, updatedAt: new Date() },
             select: {
                 id: true,
-                name: true,
-                profilePicture: true
-            }
+                firstName: true,
+                lastName: true,
+                avatar: true,
+            },
         });
 
         res.json({
             success: true,
             message: 'Profile picture updated successfully',
             data: {
-                profilePicture: updatedDriver.profilePicture
-            }
+                profileImage: updatedDriver.avatar,
+            },
         });
 
     } catch (error) {
@@ -345,28 +323,40 @@ router.post('/documents', authenticateToken, upload.array('documents', 5), async
             });
         }
 
-        const validTypes = ['LICENSE', 'INSURANCE', 'REGISTRATION', 'BACKGROUND_CHECK', 'MEDICAL_CERTIFICATE'];
+        const DOCUMENT_TYPE_MAP = {
+            LICENSE: 'DRIVER_LICENSE',
+            DRIVER_LICENSE: 'DRIVER_LICENSE',
+            REGISTRATION: 'VEHICLE_REGISTRATION',
+            VEHICLE_REGISTRATION: 'VEHICLE_REGISTRATION',
+            INSURANCE: 'INSURANCE',
+            PERMIT: 'PERMIT',
+            ID_CARD: 'ID_CARD',
+            ID: 'ID_CARD',
+            PHOTO: 'PHOTO',
+            BACKGROUND_CHECK: 'PERMIT',
+            MEDICAL_CERTIFICATE: 'ID_CARD',
+        };
+        const VALID_TYPES = new Set(Object.values(DOCUMENT_TYPE_MAP));
 
         // Create document records
         const documents = await Promise.all(
             req.files.map(async (file, index) => {
-                const documentType = types[index];
+                const rawType = String(documentType || '').trim().toUpperCase();
+                const normalizedType = DOCUMENT_TYPE_MAP[rawType] || rawType;
 
-                if (!validTypes.includes(documentType)) {
+                if (!VALID_TYPES.has(normalizedType)) {
                     throw new Error(`Invalid document type: ${documentType}`);
                 }
 
-                return await prisma.driverDocument.create({
+                return prisma.documents.create({
                     data: {
                         driverId,
-                        type: documentType,
+                        type: normalizedType,
                         fileName: file.originalname,
-                        filePath: `/uploads/driver-documents/${file.filename}`,
+                        fileUrl: `/uploads/driver-documents/${file.filename}`,
                         fileSize: file.size,
-                        mimeType: file.mimetype,
-                        status: 'PENDING_REVIEW',
-                        uploadedAt: new Date()
-                    }
+                        status: 'PENDING',
+                    },
                 });
             })
         );
@@ -379,7 +369,7 @@ router.post('/documents', authenticateToken, upload.array('documents', 5), async
                 type: doc.type,
                 fileName: doc.fileName,
                 status: doc.status,
-                uploadedAt: doc.uploadedAt
+                uploadedAt: doc.createdAt
             }))
         });
 
@@ -417,7 +407,7 @@ router.get('/stats', authenticateToken, async (req, res) => {
         }
 
         // Get ride statistics
-        const rideStats = await prisma.ride.groupBy({
+        const rideStats = await prisma.rides.groupBy({
             by: ['status'],
             where: {
                 driverId,
@@ -429,27 +419,32 @@ router.get('/stats', authenticateToken, async (req, res) => {
         });
 
         // Get earnings data
-        const earningsData = await prisma.ride.findMany({
+        const earningsData = await prisma.rides.findMany({
             where: {
                 driverId,
                 status: 'COMPLETED',
                 ...(Object.keys(dateFilter).length > 0 && { completedAt: dateFilter })
             },
             include: {
-                payment: {
+                payments: {
                     select: {
                         driverEarnings: true,
                         tips: true
-                    }
+                    },
+                    where: {
+                        status: { in: ['COMPLETED', 'PAID'] },
+                    },
+                    orderBy: { createdAt: 'desc' },
+                    take: 1,
                 }
             }
         });
 
         const totalEarnings = earningsData.reduce((sum, ride) =>
-            sum + (ride.payment?.driverEarnings || 0) + (ride.payment?.tips || 0), 0);
+            sum + (ride.payments?.[0]?.driverEarnings || 0) + (ride.payments?.[0]?.tips || 0), 0);
 
         // Get ratings data
-        const ratingsData = await prisma.ride.findMany({
+        const ratingsData = await prisma.rides.findMany({
             where: {
                 driverId,
                 status: 'COMPLETED',
@@ -462,7 +457,12 @@ router.get('/stats', authenticateToken, async (req, res) => {
         });
 
         const averageRating = ratingsData.length > 0 ?
-            ratingsData.reduce((sum, ride) => sum + ride.passengerRating, 0) / ratingsData.length : 0;
+            ratingsData.reduce((sum, ride) => {
+                const ratingValue = typeof ride.passengerRating === 'number'
+                    ? ride.passengerRating
+                    : Number(ride.passengerRating?.score ?? ride.passengerRating?.value ?? 0);
+                return sum + (Number.isFinite(ratingValue) ? ratingValue : 0);
+            }, 0) / ratingsData.length : 0;
 
         const stats = {
             period,
@@ -517,7 +517,7 @@ router.delete('/account', authenticateToken, async (req, res) => {
         // Verify password
         const driver = await prisma.user.findUnique({
             where: { id: driverId },
-            select: { password: true, status: true }
+            select: { password: true, email: true, phone: true, isActive: true, preferences: true }
         });
 
         if (!driver) {
@@ -530,7 +530,7 @@ router.delete('/account', authenticateToken, async (req, res) => {
         }
 
         // Check for active rides
-        const activeRides = await prisma.ride.findMany({
+        const activeRides = await prisma.rides.findMany({
             where: {
                 driverId,
                 status: { in: ['ACCEPTED', 'ARRIVED', 'IN_PROGRESS'] }
@@ -544,14 +544,25 @@ router.delete('/account', authenticateToken, async (req, res) => {
         }
 
         // Soft delete the account
+        const existingPreferences =
+            driver.preferences && typeof driver.preferences === 'object'
+                ? driver.preferences
+                : {};
+
         await prisma.user.update({
             where: { id: driverId },
             data: {
-                status: 'DELETED',
+                isActive: false,
                 deletedAt: new Date(),
-                deleteReason: reason || 'User requested account deletion',
-                email: `deleted_${Date.now()}_${driver.email}`, // Prevent email conflicts
-                phoneNumber: `deleted_${Date.now()}_${driver.phoneNumber}` // Prevent phone conflicts
+                email: driver.email ? `deleted_${Date.now()}_${driver.email}` : null,
+                phone: driver.phone ? `deleted_${Date.now()}_${driver.phone}` : null,
+                preferences: {
+                    ...existingPreferences,
+                    accountDeletion: {
+                        reason: reason || 'User requested account deletion',
+                        deletedAt: new Date().toISOString(),
+                    },
+                },
             }
         });
 

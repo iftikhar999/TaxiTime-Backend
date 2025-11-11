@@ -73,7 +73,7 @@ async function clearDriverVehicle(driverEmail) {
         }
 
         // Check if driver has any assigned vehicles in assignments table
-        const assignments = await prisma.assignment.findMany({
+        const assignments = await prisma.assignments.findMany({
             where: {
                 driverId: driver.id
             }
@@ -82,7 +82,7 @@ async function clearDriverVehicle(driverEmail) {
         if (assignments.length > 0) {
             console.log(`📦 Found ${assignments.length} vehicle assignment(s), clearing them...\n`);
 
-            await prisma.assignment.deleteMany({
+            await prisma.assignments.deleteMany({
                 where: {
                     driverId: driver.id
                 }

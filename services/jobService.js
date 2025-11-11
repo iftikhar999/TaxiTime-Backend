@@ -1,5 +1,11 @@
 const { PrismaClient } = require('@prisma/client');
+const { randomUUID } = require('crypto');
 const prisma = new PrismaClient();
+
+// Temporary aliases while legacy code is migrated to new Prisma model names
+prisma.offer = prisma.offers;
+prisma.ride = prisma.rides;
+prisma.locationUpdates = prisma.location_updates;
 
 const JOB_FLOW_V2_ENABLED = String(process.env.FEATURE_JOB_FLOW_V2 || '')
   .toLowerCase() === 'true';
@@ -46,7 +52,7 @@ class JobService {
 
     const timer = setTimeout(async () => {
       try {
-        const freshAssignment = await prisma.assignment.findUnique({
+        const freshAssignment = await prisma.assignments.findUnique({
           where: { id: assignment.id },
           select: { status: true, driverId: true },
         });
@@ -74,7 +80,7 @@ class JobService {
           return;
         }
 
-        await prisma.offer.update({
+        await prisma.offers.update({
           where: { id: offer.id },
           data: {
             status: 'EXPIRED',
@@ -201,12 +207,15 @@ class JobService {
       let ride = null;
       if (jobType === 'TAXI') {
         const rideId = `RIDE_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-        ride = await prisma.ride.create({
+        ride = await prisma.rides.create({
           data: {
+            id: randomUUID(),
             rideId,
             passengerId: jobData.customerId,
             companyId: jobData.companyId,
             rideType: 'TAXI',
+            createdAt: new Date(),
+            updatedAt: new Date(),
             pickup: {
               address: jobData.pickupAddress,
               latitude: jobData.pickupLatitude,
@@ -243,8 +252,10 @@ class JobService {
         ? requestedStatus
         : 'UNASSIGNED';
 
-      const job = await prisma.job.create({
+      const jobUuid = randomUUID();
+      const jobRecord = await prisma.job.create({
         data: {
+          id: jobUuid,
           jobId,
           type: jobType,
           customerId: jobData.customerId,
@@ -267,14 +278,37 @@ class JobService {
           paymentMethod: jobData.paymentMethod,
           requirements: jobData.requirements,
           instructions: jobData.instructions,
+          createdAt: new Date(),
+          updatedAt: new Date(),
         },
         include: {
-          customer: true,
-          company: true,
-          trip: true,
-          deliveryOrder: true,
-        }
+          // Fixed relation names
+          users_jobs_customerIdTousers: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              phone: true,
+              email: true,
+            },
+          },
+          companies: true,
+          rides: true,
+          delivery_orders: true,
+        },
       });
+
+      const job = {
+        ...jobRecord,
+        customer: jobRecord.users_jobs_customerIdTousers ?? null,
+        company: jobRecord.companies ?? null,
+        trip: jobRecord.rides ?? null,
+        deliveryOrder: jobRecord.delivery_orders ?? null,
+      };
+      delete job.users_jobs_customerIdTousers;
+      delete job.companies;
+      delete job.rides;
+      delete job.delivery_orders;
 
       // Create offers for nearby drivers (don't wait for this)
       this.createOffersForJob(job).catch(error => {
@@ -310,15 +344,18 @@ class JobService {
       const offerPromises = nearbyDrivers.slice(0, 5).map(async driver => {
         try {
           const expiresAt = new Date(Date.now() + JOB_OFFER_TIMEOUT_MS);
-          const offer = await prisma.offer.create({
+          const offer = await prisma.offers.create({
             data: {
+              id: randomUUID(),
               jobId: job.id,
               driverId: driver.id,
               estimatedFare: job.estimatedPrice || 10.00,
               estimatedDuration: Math.round(job.estimatedDuration || 15),
               distanceToPickup: driver.distanceToPickup || 1.0,
               expiresAt,
-              status: 'SENT'
+              status: 'SENT',
+              createdAt: new Date(),
+              updatedAt: new Date(),
             }
           });
 
@@ -384,7 +421,8 @@ class JobService {
           }
         },
         include: {
-          locationUpdates: {
+          // Fixed relation names
+          location_updates: {
             orderBy: { createdAt: 'desc' },
             take: 1
           }
@@ -394,7 +432,7 @@ class JobService {
       // Filter by distance (simplified distance calculation)
       const nearbyDrivers = activeDrivers
         .map(driver => {
-          const lastLocation = driver.locationUpdates[0];
+          const lastLocation = driver.location_updates[0];
           if (!lastLocation) return null;
 
           const distance = this.calculateDistance(
@@ -571,7 +609,7 @@ class JobService {
   async acceptOffer(offerId, driverId) {
     try {
       // Update offer status
-      const offer = await prisma.offer.update({
+      const offer = await prisma.offers.update({
         where: { id: offerId },
         data: {
           status: 'ACCEPTED',
@@ -579,19 +617,22 @@ class JobService {
           response: 'ACCEPTED',
         },
         include: {
+          // Fixed relation names
           job: true,
           driver: true,
         }
       });
 
       // Create assignment
-      const assignment = await prisma.assignment.create({
+      const assignment = await prisma.assignments.create({
         data: {
+          id: randomUUID(),
           jobId: offer.jobId,
           driverId: driverId,
           status: 'ASSIGNED',
           assignedAt: new Date(),
           assignedBy: 'SYSTEM',
+          updatedAt: new Date(),
         }
       });
 
@@ -608,7 +649,7 @@ class JobService {
       this.clearOfferExpiryTimer(offer.jobId);
 
       // Reject other pending offers for this job
-      await prisma.offer.updateMany({
+      await prisma.offers.updateMany({
         where: {
           jobId: offer.jobId,
           status: 'SENT',
@@ -637,8 +678,9 @@ class JobService {
       const job = await prisma.job.findUnique({
         where: { id: jobId },
         include: {
-          company: true,
-          customer: {
+          // Fixed relation names
+          companies: true,
+          users_jobs_customerIdTousers: {
             select: {
               id: true,
               firstName: true,
@@ -702,7 +744,7 @@ class JobService {
       }
 
       if (job.assignedDriverId && job.assignedDriverId !== driverId) {
-        await prisma.assignment.updateMany({
+        await prisma.assignments.updateMany({
           where: {
             jobId,
             driverId: job.assignedDriverId,
@@ -718,19 +760,21 @@ class JobService {
 
       const previousStatus = job.status;
 
-      const assignment = await prisma.assignment.create({
+      const assignment = await prisma.assignments.create({
         data: {
+          id: randomUUID(),
           jobId,
           driverId,
           status: 'OFFERED',
           assignedAt: new Date(),
           assignedBy,
+          updatedAt: new Date(),
         },
       });
 
       const expiresAt = new Date(Date.now() + JOB_OFFER_TIMEOUT_MS);
 
-      let offerRecord = await prisma.offer.findFirst({
+      let offerRecord = await prisma.offers.findFirst({
         where: {
           jobId,
           driverId,
@@ -739,7 +783,7 @@ class JobService {
       });
 
       if (offerRecord) {
-        offerRecord = await prisma.offer.update({
+        offerRecord = await prisma.offers.update({
           where: { id: offerRecord.id },
           data: {
             status: 'SENT',
@@ -752,8 +796,9 @@ class JobService {
           },
         });
       } else {
-        offerRecord = await prisma.offer.create({
+        offerRecord = await prisma.offers.create({
           data: {
+            id: randomUUID(),
             jobId,
             driverId,
             estimatedFare: job.estimatedPrice || 0,
@@ -761,6 +806,8 @@ class JobService {
             distanceToPickup: 0, // Set to 0 instead of null since schema requires Float
             expiresAt,
             status: 'SENT',
+            createdAt: new Date(),
+            updatedAt: new Date(),
           },
         });
       }
@@ -791,7 +838,7 @@ class JobService {
       console.log(`📝 [JobService] Job ${jobId} assigned to driver ${driverId} - ${previousStatus} → OFFERED`);
 
       if (offerRecord?.id) {
-        await prisma.offer.updateMany({
+        await prisma.offers.updateMany({
           where: {
             jobId,
             status: 'SENT',
@@ -901,8 +948,9 @@ class JobService {
     const job = await prisma.job.findUnique({
       where: { id: jobId },
       include: {
-        company: true,
-        customer: {
+          // Fixed relation names
+        companies: true,
+        users_jobs_customerIdTousers: {
           select: { id: true, firstName: true, lastName: true, phone: true },
         },
         assignments: {
@@ -943,7 +991,7 @@ class JobService {
 
     const claimableStatuses = new Set(['PENDING', 'UNASSIGNED']);
 
-    const hasActiveOffer = await prisma.offer.findFirst({
+    const hasActiveOffer = await prisma.offers.findFirst({
       where: {
         jobId,
         driverId,
@@ -973,7 +1021,7 @@ class JobService {
     const timestamp = new Date();
     console.log('🎯 [CLAIM JOB] Step 7: Cancelling other assignments');
 
-    const cancelledAssignments = await prisma.assignment.updateMany({
+    const cancelledAssignments = await prisma.assignments.updateMany({
       where: {
         jobId,
         driverId: { not: driverId },
@@ -988,7 +1036,7 @@ class JobService {
     console.log('🎯 [CLAIM JOB] Step 7 Complete: Cancelled assignments', { count: cancelledAssignments.count });
 
     console.log('🎯 [CLAIM JOB] Step 8: Expiring other offers');
-    const expiredOffers = await prisma.offer.updateMany({
+    const expiredOffers = await prisma.offers.updateMany({
       where: {
         jobId,
         status: { in: ['SENT', 'ACCEPTED'] }, // Fixed: ASSIGNED is not a valid OfferStatus (valid: SENT, ACCEPTED, REJECTED, EXPIRED)
@@ -1012,8 +1060,9 @@ class JobService {
     const updatedJob = await prisma.job.findUnique({
       where: { id: jobId },
       include: {
-        company: true,
-        customer: {
+          // Fixed relation names
+        companies: true,
+        users_jobs_customerIdTousers: {
           select: { id: true, firstName: true, lastName: true, phone: true },
         },
         assignments: {
@@ -1087,8 +1136,9 @@ class JobService {
     const job = await prisma.job.findUnique({
       where: { id: jobId },
       include: {
-        company: true,
-        customer: {
+          // Fixed relation names
+        companies: true,
+        users_jobs_customerIdTousers: {
           select: {
             id: true,
             firstName: true,
@@ -1122,7 +1172,7 @@ class JobService {
     const timestamp = new Date();
 
     // Cancel ALL active assignments (OFFERED, ASSIGNED, ACCEPTED)
-    await prisma.assignment.updateMany({
+    await prisma.assignments.updateMany({
       where: {
         jobId,
         driverId: job.assignedDriverId,
@@ -1135,7 +1185,7 @@ class JobService {
       },
     });
 
-    await prisma.offer.updateMany({
+    await prisma.offers.updateMany({
       where: {
         jobId,
         driverId: previousDriverId,
@@ -1156,9 +1206,10 @@ class JobService {
         updatedAt: new Date(),
       },
       include: {
-        customer: true,
-        assignedDriver: true,
-        company: true,
+          // Fixed relation names
+        users_jobs_customerIdTousers: true,
+        users_jobs_assignedDriverIdTousers: true,
+        companies: true,
       },
     });
 
@@ -1264,7 +1315,8 @@ class JobService {
     const job = await prisma.job.findUnique({
       where: { id: jobId },
       include: {
-        trip: true,
+          // Fixed relation names
+        rides: true,
       },
     });
 
@@ -1339,59 +1391,181 @@ class JobService {
       where: { id: jobId },
       data: updateData,
       include: {
-        customer: true,
-        assignedDriver: true,
+          // Fixed relation names
+        users_jobs_customerIdTousers: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            phone: true,
+            email: true,
+          },
+        },
+        users_jobs_assignedDriverIdTousers: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            phone: true,
+            email: true,
+          },
+        },
       },
     });
 
-    if (job.tripId) {
-      await prisma.ride.update({
+    const jobTrip = job.rides;
+
+    if (job.tripId && jobTrip) {
+      await prisma.rides.update({
         where: { id: job.tripId },
         data: {
           pickup: payload.pickup
             ? {
-              ...job.trip.pickup,
+              ...jobTrip.pickup,
               address: payload.pickup.address,
               latitude: payload.pickup.latitude,
               longitude: payload.pickup.longitude,
             }
-            : job.trip.pickup,
+            : jobTrip.pickup,
           destination: payload.dropoff
             ? {
-              ...job.trip.destination,
+              ...jobTrip.destination,
               address: payload.dropoff.address,
               latitude: payload.dropoff.latitude,
               longitude: payload.dropoff.longitude,
             }
-            : job.trip.destination,
+            : jobTrip.destination,
           estimatedFare:
-            payload.estimatedPrice ?? job.trip.estimatedFare ?? undefined,
+            payload.estimatedPrice ?? jobTrip.estimatedFare ?? undefined,
           estimatedDistance:
-            payload.estimatedDistance ?? job.trip.estimatedDistance ?? undefined,
+            payload.estimatedDistance ?? jobTrip.estimatedDistance ?? undefined,
           estimatedDuration:
-            payload.estimatedDuration ?? job.trip.estimatedDuration ?? undefined,
+            payload.estimatedDuration ?? jobTrip.estimatedDuration ?? undefined,
         },
       });
     }
 
-    return updatedJob;
+    const normalizedJob = {
+      ...updatedJob,
+      customer: updatedJob.users_jobs_customerIdTousers ?? null,
+      assignedDriver: updatedJob.users_jobs_assignedDriverIdTousers ?? null,
+    };
+    delete normalizedJob.users_jobs_customerIdTousers;
+    delete normalizedJob.users_jobs_assignedDriverIdTousers;
+
+    return normalizedJob;
   }
 
   // Update job status
   async updateJobStatus(jobId, status, driverId, locationData = null) {
     try {
-      const job = await prisma.job.update({
+      const userContactSelect = {
+        id: true,
+        firstName: true,
+        lastName: true,
+        phone: true,
+        email: true,
+      };
+      const normalizeJobRecord = (jobRecord) => {
+        const job = {
+          ...jobRecord,
+          customer: jobRecord.users_jobs_customerIdTousers ?? null,
+          assignedDriver: jobRecord.users_jobs_assignedDriverIdTousers ?? null,
+          trip: jobRecord.rides ?? null,
+        };
+        delete job.users_jobs_customerIdTousers;
+        delete job.users_jobs_assignedDriverIdTousers;
+        delete job.rides;
+        return job;
+      };
+      const normalizedStatus =
+        typeof status === 'string' ? status.trim().toUpperCase() : null;
+
+      if (normalizedStatus === 'RECALL' || normalizedStatus === 'RECALLED') {
+        const existingJob = await prisma.job.findUnique({
+          where: { id: jobId },
+          include: {
+            users_jobs_customerIdTousers: {
+              select: userContactSelect,
+            },
+            users_jobs_assignedDriverIdTousers: {
+              select: userContactSelect,
+            },
+            rides: true,
+          },
+        });
+
+        if (!existingJob) {
+          throw new Error('Job not found');
+        }
+
+        const driverToRelease = existingJob.assignedDriverId || driverId || null;
+        const updatedJobRecord = await prisma.job.update({
+          where: { id: jobId },
+          data: {
+            status: 'UNASSIGNED',
+            assignedDriverId: null,
+            updatedAt: new Date(),
+          },
+          include: {
+            users_jobs_customerIdTousers: {
+              select: userContactSelect,
+            },
+            users_jobs_assignedDriverIdTousers: {
+              select: userContactSelect,
+            },
+            rides: true,
+          },
+        });
+
+        await prisma.assignments.updateMany({
+          where: {
+            jobId,
+            ...(driverToRelease ? { driverId: driverToRelease } : {}),
+          },
+          data: {
+            status: 'CANCELLED',
+            rejectionReason: 'RECALLED',
+            respondedAt: new Date(),
+            updatedAt: new Date(),
+          },
+        });
+
+        if (driverToRelease) {
+          await prisma.user.update({
+            where: { id: driverToRelease },
+            data: {
+              preferences: {
+                driverStatus: 'AVAILABLE',
+                lastStatusChange: new Date().toISOString(),
+              },
+            },
+          });
+        }
+
+        this.clearOfferExpiryTimer(jobId);
+        return normalizeJobRecord(updatedJobRecord);
+      }
+
+      const jobRecord = await prisma.job.update({
         where: { id: jobId },
         data: {
           status: status,
           updatedAt: new Date(),
         },
         include: {
-          customer: true,
-          assignedDriver: true,
-          trip: true,
+          // Fixed relation names
+          users_jobs_customerIdTousers: {
+            select: userContactSelect,
+          },
+          users_jobs_assignedDriverIdTousers: {
+            select: userContactSelect,
+          },
+          rides: true,
         }
       });
+
+      const job = normalizeJobRecord(jobRecord);
 
       // Update location if provided
       if (locationData && driverId) {
@@ -1507,13 +1681,13 @@ class JobService {
 
   async handleJobCancelled(job) {
     // Update all related offers
-    await prisma.offer.updateMany({
+    await prisma.offers.updateMany({
       where: { jobId: job.id },
       data: { status: 'EXPIRED' }
     });
 
     // Update assignments
-    await prisma.assignment.updateMany({
+    await prisma.assignments.updateMany({
       where: { jobId: job.id },
       data: { status: 'CANCELLED' }
     });
@@ -1530,7 +1704,8 @@ class JobService {
           }
         },
         include: {
-          customer: {
+          // Fixed relation names
+          users_jobs_customerIdTousers: {
             select: {
               id: true,
               firstName: true,
@@ -1539,8 +1714,8 @@ class JobService {
               profilePicture: true,
             }
           },
-          trip: true,
-          deliveryOrder: true,
+          rides: true,
+          delivery_orders: true,
         },
         orderBy: { createdAt: 'desc' }
       });
@@ -1625,7 +1800,8 @@ class JobService {
       const job = await prisma.job.findUnique({
         where: { id: jobId },
         include: {
-          assignedDriver: {
+          // Fixed relation names
+          users_jobs_assignedDriverIdTousers: {
             select: {
               id: true,
               firstName: true,
@@ -1640,7 +1816,7 @@ class JobService {
       }
 
       // Check if job has any active offers or assignments
-      const activeAssignments = await prisma.assignment.findMany({
+      const activeAssignments = await prisma.assignments.findMany({
         where: {
           jobId: jobId,
           status: { in: ['OFFERED', 'ASSIGNED', 'ACCEPTED'] }
@@ -1654,7 +1830,7 @@ class JobService {
       // Handle OFFERED state (no assignedDriverId yet, but has offers)
       if (!job.assignedDriverId && activeAssignments.length > 0) {
         // Cancel all active offers/assignments
-        await prisma.assignment.updateMany({
+        await prisma.assignments.updateMany({
           where: {
             jobId: jobId,
             status: { in: ['OFFERED', 'ASSIGNED', 'ACCEPTED'] }
@@ -1673,12 +1849,17 @@ class JobService {
             status: 'UNASSIGNED',
           },
           include: {
-            customer: true,
+            users_jobs_customerIdTousers: true,
           }
         });
 
         console.log(`✅ Job ${jobId} offers cancelled by dispatcher ${dispatcherId}`);
-        return updatedJob;
+        const normalizedJob = {
+          ...updatedJob,
+          customer: updatedJob.users_jobs_customerIdTousers ?? null,
+        };
+        delete normalizedJob.users_jobs_customerIdTousers;
+        return normalizedJob;
       }
 
       // Handle ASSIGNED/ACCEPTED state (has assignedDriverId)
@@ -1688,18 +1869,17 @@ class JobService {
       const updatedJob = await prisma.job.update({
         where: { id: jobId },
         data: {
-          assignedDriver: {
-            disconnect: true
-          },
+          assignedDriverId: null,
           status: 'UNASSIGNED',
         },
         include: {
-          customer: true,
+          // Fixed relation names
+          users_jobs_customerIdTousers: true,
         }
       });
 
       // Update the assignment record
-      await prisma.assignment.updateMany({
+      await prisma.assignments.updateMany({
         where: {
           jobId: jobId,
           driverId: previousDriverId,
@@ -1713,7 +1893,12 @@ class JobService {
       });
 
       console.log(`✅ Job ${jobId} unassigned from driver ${previousDriverId} by ${dispatcherId}`);
-      return updatedJob;
+      const normalizedJob = {
+        ...updatedJob,
+        customer: updatedJob.users_jobs_customerIdTousers ?? null,
+      };
+      delete normalizedJob.users_jobs_customerIdTousers;
+      return normalizedJob;
 
     } catch (error) {
       console.error('Error unassigning driver from job:', error);
@@ -1727,7 +1912,8 @@ class JobService {
       const jobs = await prisma.job.findMany({
         where: { customerId: customerId },
         include: {
-          driver: {
+          // Fixed relation names
+          users_jobs_assignedDriverIdTousers: {
             select: {
               id: true,
               firstName: true,
@@ -1736,10 +1922,9 @@ class JobService {
               profilePicture: true,
             }
           },
-          trip: true,
-          deliveryOrder: true,
+          rides: true,
+          delivery_orders: true,
           payments: true,
-          ratings: true,
         },
         orderBy: { createdAt: 'desc' },
         skip: (page - 1) * limit,

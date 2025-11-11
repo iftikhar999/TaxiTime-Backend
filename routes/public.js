@@ -40,14 +40,14 @@ const ensurePassenger = async ({ firstName, lastName, email, phone }) => {
 
 const resolveCompany = async (companyId) => {
     if (companyId) {
-        const company = await prisma.company.findUnique({ where: { id: companyId } });
+        const company = await prisma.companies.findUnique({ where: { id: companyId } });
         if (company) {
             return company;
         }
         throw new Error('Invalid companyId');
     }
 
-    const firstCompany = await prisma.company.findFirst({
+    const firstCompany = await prisma.companies.findFirst({
         where: { status: { in: ['ACTIVE', 'PENDING'] } },
         orderBy: { createdAt: 'asc' }
     });
@@ -274,7 +274,7 @@ router.post('/company-signup', async (req, res) => {
             });
         }
 
-        const existingCompany = await prisma.company.findFirst({ where: { ownerId: owner.id } });
+        const existingCompany = await prisma.companies.findFirst({ where: { ownerId: owner.id } });
         if (existingCompany) {
             return res.status(400).json({
                 success: false,
@@ -282,7 +282,7 @@ router.post('/company-signup', async (req, res) => {
             });
         }
 
-        const company = await prisma.company.create({
+        const company = await prisma.companies.create({
             data: {
                 ownerId: owner.id,
                 brandName: companyName,

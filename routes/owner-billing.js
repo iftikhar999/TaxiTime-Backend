@@ -1,44 +1,15 @@
 const express = require('express');
-const { PrismaClient } = require('@prisma/client');
+const prisma = require('../lib/prisma');
 const { authenticateToken, authorizeRoles } = require('../middleware/auth');
+const { companyMiddleware } = require('../middleware/company');
 
 const router = express.Router();
-const prisma = new PrismaClient();
+
 
 // Middleware: Require OWNER or COMPANY_ADMIN role and scope to company
 router.use(authenticateToken);
-router.use(authorizeRoles('OWNER', 'COMPANY_ADMIN'));
-
-const scopeToCompany = async (req, res, next) => {
-    try {
-        const user = await prisma.user.findUnique({
-            where: { id: req.user.id },
-            include: {
-                ownedCompany: true,
-                company: true
-            }
-        });
-
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-
-        if (user.role === 'OWNER' && user.ownedCompany) {
-            req.companyId = user.ownedCompany.id;
-        } else if (user.role === 'COMPANY_ADMIN' && user.companyId) {
-            req.companyId = user.companyId;
-        } else {
-            return res.status(403).json({ error: 'User not associated with any company' });
-        }
-
-        next();
-    } catch (error) {
-        console.error('Company scoping error:', error);
-        res.status(500).json({ error: 'Internal server error' });
-    }
-};
-
-router.use(scopeToCompany);
+router.use(authorizeRoles('OWNER', 'COMPANY_ADMIN', 'ADMIN', 'SUPER_ADMIN'));
+router.use(companyMiddleware);
 
 // Helper function to get date range based on period
 const getDateRange = (period) => {
@@ -279,7 +250,7 @@ router.post('/request-payout', async (req, res) => {
 router.get('/subscription', async (req, res) => {
     try {
         // Fetch company subscription details
-        const company = await prisma.company.findUnique({
+        const company = await prisma.companies.findUnique({
             where: { id: req.companyId },
             include: {
                 subscriptionPlan: true

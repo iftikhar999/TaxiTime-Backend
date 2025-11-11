@@ -6,51 +6,39 @@
  */
 
 const express = require('express');
+const { v4: uuidv4 } = require('uuid');
 const router = express.Router();
 const prisma = require('../lib/prisma');
 const { authenticateToken, authorizeRoles } = require('../middleware/auth');
+const { companyMiddleware } = require('../middleware/company');
+
+const buildLinkedZones = (zoneTariffs = []) =>
+    zoneTariffs.map((zt) => {
+        const zone = zt.zones || zt.zone;
+        return zone
+            ? {
+                  zoneId: zone.id,
+                  zoneName: zone.name,
+                  isDefault: zt.isDefault,
+                  priority: zt.priority,
+                  isActive: zone.isActive ?? true
+              }
+            : null;
+    }).filter(Boolean);
+
+const attachLinkedZones = (tariff) => {
+    if (!tariff) return null;
+    const zoneTariffs = tariff.zone_tariffs || tariff.zoneTariffs || [];
+    return {
+        ...tariff,
+        linkedZones: buildLinkedZones(zoneTariffs)
+    };
+};
 
 // All routes require OWNER or ADMIN role
 router.use(authenticateToken);
-router.use(authorizeRoles('OWNER', 'COMPANY_ADMIN', 'SUPER_ADMIN'));
-
-const scopeToCompany = async (req, res, next) => {
-    try {
-        const user = await prisma.user.findUnique({
-            where: { id: req.user.id },
-            include: {
-                ownedCompany: true,
-                company: true
-            }
-        });
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-
-        if (user.role === 'OWNER' && user.ownedCompany) {
-            req.companyId = user.ownedCompany.id;
-        } else if (user.role === 'COMPANY_ADMIN' && user.companyId) {
-            req.companyId = user.companyId;
-        } else if (user.role === 'SUPER_ADMIN') {
-            // For SUPER_ADMIN, allow access to any company - use the first company or create a default
-            const firstCompany = await prisma.company.findFirst();
-            if (firstCompany) {
-                req.companyId = firstCompany.id;
-            } else {
-                return res.status(404).json({ error: 'No company found' });
-            }
-        } else {
-            return res.status(403).json({ error: 'User not associated with a company' });
-        }
-
-        next();
-    } catch (error) {
-        console.error('Company scope error:', error);
-        res.status(500).json({ error: 'Internal server error' });
-    }
-};
-
-router.use(scopeToCompany);
+router.use(authorizeRoles('OWNER', 'COMPANY_ADMIN', 'ADMIN', 'SUPER_ADMIN'));
+router.use(companyMiddleware);
 
 // ═══════════════════════════════════════════════════════════
 // GET /api/owner/tariffs - List all tariffs for company
@@ -66,12 +54,12 @@ router.get('/', async (req, res) => {
             });
         }
 
-        const tariffs = await prisma.tariff.findMany({
+        const tariffs = await prisma.tariffs.findMany({
             where: { companyId },
             include: {
-                zoneTariffs: {
+                zone_tariffs: {
                     include: {
-                        zone: {
+                        zones: {
                             select: {
                                 id: true,
                                 name: true,
@@ -82,7 +70,7 @@ router.get('/', async (req, res) => {
                 },
                 _count: {
                     select: {
-                        zoneTariffs: true,
+                        zone_tariffs: true,
                         rides: true
                     }
                 }
@@ -93,18 +81,14 @@ router.get('/', async (req, res) => {
         });
 
         // Transform response to include linked zones
-        const tariffsWithZones = tariffs.map(tariff => ({
-            ...tariff,
-            linkedZones: tariff.zoneTariffs.map(zt => ({
-                zoneId: zt.zone.id,
-                zoneName: zt.zone.name,
-                isDefault: zt.isDefault,
-                priority: zt.priority,
-                isActive: zt.zone.isActive
-            })),
-            zonesCount: tariff._count.zoneTariffs,
-            ridesCount: tariff._count.rides
-        }));
+        const tariffsWithZones = tariffs.map((tariff) => {
+            const formatted = attachLinkedZones(tariff);
+            return {
+                ...formatted,
+                zonesCount: tariff._count.zone_tariffs,
+                ridesCount: tariff._count.rides
+            };
+        });
 
         res.json({
             success: true,
@@ -130,15 +114,15 @@ router.get('/:id', async (req, res) => {
         const { id } = req.params;
         const companyId = req.companyId;
 
-        const tariff = await prisma.tariff.findFirst({
+        const tariff = await prisma.tariffs.findFirst({
             where: {
                 id,
                 companyId
             },
             include: {
-                zoneTariffs: {
+                zone_tariffs: {
                     include: {
-                        zone: {
+                        zones: {
                             select: {
                                 id: true,
                                 name: true,
@@ -176,7 +160,7 @@ router.get('/:id', async (req, res) => {
 
         res.json({
             success: true,
-            data: tariff
+            data: attachLinkedZones(tariff)
         });
 
     } catch (error) {
@@ -225,8 +209,9 @@ router.post('/', async (req, res) => {
         }
 
         // Create tariff (no vehicle type required!)
-        const tariff = await prisma.tariff.create({
+        const tariff = await prisma.tariffs.create({
             data: {
+                id: uuidv4(),
                 companyId,
                 name,
                 description,
@@ -243,32 +228,34 @@ router.post('/', async (req, res) => {
                 maxSurgeMultiplier: maxSurgeMultiplier ? parseFloat(maxSurgeMultiplier) : 3.0,
                 isActive: isActive !== undefined ? isActive : true,
                 validFrom: validFrom ? new Date(validFrom) : null,
-                validTo: validTo ? new Date(validTo) : null
+                validTo: validTo ? new Date(validTo) : null,
+                updatedAt: new Date()
             }
         });
 
         // Optionally link to zones immediately
         if (zoneIds && Array.isArray(zoneIds) && zoneIds.length > 0) {
             const zoneTariffData = zoneIds.map((zoneId, index) => ({
+                id: uuidv4(),
                 zoneId,
                 tariffId: tariff.id,
                 priority: index + 1,
                 isDefault: index === 0 // First one is default
             }));
 
-            await prisma.zoneTariff.createMany({
+            await prisma.zone_tariffs.createMany({
                 data: zoneTariffData,
                 skipDuplicates: true
             });
         }
 
         // Fetch complete tariff with relations
-        const completeTariff = await prisma.tariff.findUnique({
+        const completeTariff = await prisma.tariffs.findUnique({
             where: { id: tariff.id },
             include: {
-                zoneTariffs: {
+                zone_tariffs: {
                     include: {
-                        zone: {
+                        zones: {
                             select: {
                                 id: true,
                                 name: true
@@ -282,7 +269,7 @@ router.post('/', async (req, res) => {
         res.status(201).json({
             success: true,
             message: 'Tariff created successfully',
-            data: completeTariff
+            data: attachLinkedZones(completeTariff)
         });
 
     } catch (error) {
@@ -305,7 +292,7 @@ router.put('/:id', async (req, res) => {
         const updateData = req.body;
 
         // Verify ownership
-        const existingTariff = await prisma.tariff.findFirst({
+        const existingTariff = await prisma.tariffs.findFirst({
             where: { id, companyId }
         });
 
@@ -344,13 +331,15 @@ router.put('/:id', async (req, res) => {
         }
 
         // Update tariff
-        const updatedTariff = await prisma.tariff.update({
+        updateData.updatedAt = new Date();
+
+        const updatedTariff = await prisma.tariffs.update({
             where: { id },
             data: updateData,
             include: {
-                zoneTariffs: {
+                zone_tariffs: {
                     include: {
-                        zone: {
+                        zones: {
                             select: {
                                 id: true,
                                 name: true
@@ -364,7 +353,7 @@ router.put('/:id', async (req, res) => {
         res.json({
             success: true,
             message: 'Tariff updated successfully',
-            data: updatedTariff
+            data: attachLinkedZones(updatedTariff)
         });
 
     } catch (error) {
@@ -386,13 +375,13 @@ router.delete('/:id', async (req, res) => {
         const companyId = req.companyId;
 
         // Verify ownership
-        const tariff = await prisma.tariff.findFirst({
+        const tariff = await prisma.tariffs.findFirst({
             where: { id, companyId },
             include: {
                 _count: {
                     select: {
                         rides: true,
-                        zoneTariffs: true
+                        zone_tariffs: true
                     }
                 }
             }
@@ -415,7 +404,7 @@ router.delete('/:id', async (req, res) => {
         }
 
         // Delete tariff (CASCADE will delete ZoneTariff records)
-        await prisma.tariff.delete({
+        await prisma.tariffs.delete({
             where: { id }
         });
 
@@ -442,7 +431,7 @@ router.post('/:id/toggle', async (req, res) => {
         const { id } = req.params;
         const companyId = req.companyId;
 
-        const tariff = await prisma.tariff.findFirst({
+        const tariff = await prisma.tariffs.findFirst({
             where: { id, companyId }
         });
 
@@ -453,7 +442,7 @@ router.post('/:id/toggle', async (req, res) => {
             });
         }
 
-        const updatedTariff = await prisma.tariff.update({
+        const updatedTariff = await prisma.tariffs.update({
             where: { id },
             data: {
                 isActive: !tariff.isActive

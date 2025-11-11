@@ -47,8 +47,8 @@ router.get('/stats', async (req, res) => {
       averageRating,
     ] = await Promise.all([
       // Companies  
-      prisma.company.count(),
-      prisma.company.count({ where: { isActive: true } }),
+      prisma.companies.count(),
+      prisma.companies.count({ where: { isActive: true } }),
 
       // Users
       prisma.user.count(),
@@ -64,18 +64,18 @@ router.get('/stats', async (req, res) => {
       prisma.job.count({ where: { status: 'CANCELLED' } }),
 
       // Revenue calculations
-      prisma.payment.aggregate({
+      prisma.payments.aggregate({
         where: { status: 'PAID' },
         _sum: { amount: true }
       }),
-      prisma.payment.aggregate({
+      prisma.payments.aggregate({
         where: {
           status: 'PAID',
           createdAt: { gte: today, lt: tomorrow }
         },
         _sum: { amount: true }
       }),
-      prisma.payment.aggregate({
+      prisma.payments.aggregate({
         where: {
           status: 'PAID',
           createdAt: { gte: thisMonth, lt: nextMonth }
@@ -84,7 +84,7 @@ router.get('/stats', async (req, res) => {
       }),
 
       // Commission (15% of total revenue)
-      prisma.payment.aggregate({
+      prisma.payments.aggregate({
         where: { status: 'PAID' },
         _sum: { amount: true }
       }).then(result => result._sum.amount ? result._sum.amount * 0.15 : 0),
@@ -100,25 +100,25 @@ router.get('/stats', async (req, res) => {
       }),
 
       // Vehicles
-      prisma.vehicle.count(),
-      prisma.vehicle.count({ where: { isActive: true } }),
+      prisma.vehicles.count(),
+      prisma.vehicles.count({ where: { isActive: true } }),
 
       // Payments
-      prisma.payment.count(),
-      prisma.payment.count({ where: { status: 'PENDING' } }),
-      prisma.payment.count({ where: { status: 'PAID' } }),
+      prisma.payments.count(),
+      prisma.payments.count({ where: { status: 'PENDING' } }),
+      prisma.payments.count({ where: { status: 'PAID' } }),
 
       // Rides
-      prisma.ride.count(),
-      prisma.ride.count({ where: { status: 'COMPLETED' } }),
-      prisma.ride.count({
+      prisma.rides.count(),
+      prisma.rides.count({ where: { status: 'COMPLETED' } }),
+      prisma.rides.count({
         where: {
           createdAt: { gte: today, lt: tomorrow }
         }
       }),
 
       // Average rating calculation
-      prisma.rating.aggregate({
+      prisma.ratings.aggregate({
         _avg: { rating: true }
       }),
 
@@ -212,7 +212,7 @@ router.get('/activities', async (req, res) => {
     const limit = parseInt(req.query.limit) || 10;
 
     // Get recent companies
-    const recentCompanies = await prisma.company.findMany({
+    const recentCompanies = await prisma.companies.findMany({
       orderBy: { createdAt: 'desc' },
       take: 5,
       select: {
@@ -244,7 +244,7 @@ router.get('/activities', async (req, res) => {
     }).catch(() => []);
 
     // Get recent payments (with error handling)
-    const recentPayments = await prisma.payment.findMany({
+    const recentPayments = await prisma.payments.findMany({
       where: { status: 'PAID' },
       orderBy: { createdAt: 'desc' },
       take: 5,

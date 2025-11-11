@@ -1,9 +1,8 @@
 const express = require('express');
-const { PrismaClient } = require('@prisma/client');
+const prisma = require('../../../lib/prisma');
 const { authenticateToken } = require('../../../middleware/auth');
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
 // Helper function to safely convert values to numbers
 const toNumber = (value, fallback = null) => {
@@ -27,10 +26,12 @@ router.get('/', authenticateToken, async (req, res) => {
             select: {
                 id: true,
                 companyId: true,
-                company: {
+                companies_users_companyIdTocompanies: {
                     select: {
                         id: true,
-                        name: true
+                        name: true,
+                        brandName: true,
+                        legalName: true
                     }
                 }
             }
@@ -43,8 +44,26 @@ router.get('/', authenticateToken, async (req, res) => {
             });
         }
 
+        const companyRecord = driver.companies_users_companyIdTocompanies
+            ?? (await prisma.companies.findUnique({
+                where: { id: driver.companyId },
+                select: {
+                    id: true,
+                    name: true,
+                    brandName: true,
+                    legalName: true
+                }
+            }));
+
+        const companySummary = companyRecord
+            ? {
+                id: companyRecord.id,
+                name: companyRecord.brandName || companyRecord.name || companyRecord.legalName || null
+            }
+            : null;
+
         // Get vehicles assigned to this driver
-        const vehicles = await prisma.vehicle.findMany({
+        const vehicles = await prisma.vehicles.findMany({
             where: {
                 driverId: userId,
                 isActive: true
@@ -73,7 +92,7 @@ router.get('/', authenticateToken, async (req, res) => {
             data: {
                 vehicles,
                 totalVehicles: vehicles.length,
-                company: driver.company
+                company: companySummary
             }
         });
 
@@ -96,7 +115,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
         const { userId } = req.user;
         const { id } = req.params;
 
-        const vehicle = await prisma.vehicle.findFirst({
+        const vehicle = await prisma.vehicles.findFirst({
             where: {
                 id,
                 driverId: userId,
@@ -117,10 +136,11 @@ router.get('/:id', authenticateToken, async (req, res) => {
                 insurance: true,
                 registration: true,
                 currentLocation: true,
-                company: {
+                companies: {
                     select: {
                         id: true,
                         name: true,
+                        brandName: true,
                         legalName: true
                     }
                 }
@@ -134,9 +154,23 @@ router.get('/:id', authenticateToken, async (req, res) => {
             });
         }
 
+        const { companies, ...vehicleData } = vehicle;
+
+        const companySummary = companies
+            ? {
+                id: companies.id,
+                name: companies.brandName || companies.name || companies.legalName || null
+            }
+            : null;
+
+        const mappedVehicle = {
+            ...vehicleData,
+            company: companySummary
+        };
+
         res.json({
             success: true,
-            data: { vehicle }
+            data: { vehicle: mappedVehicle }
         });
 
     } catch (error) {
@@ -206,19 +240,20 @@ router.post('/select', authenticateToken, async (req, res) => {
         }
 
         // Verify the vehicle belongs to this driver
-        const vehicle = await prisma.vehicle.findFirst({
+        const vehicle = await prisma.vehicles.findFirst({
             where: {
                 id: vehicleId,
                 driverId: userId,
                 isActive: true
             },
-            include: {
-                vehicleTypeMaster: {
-                    select: {
-                        name: true,
-                        description: true
-                    }
-                }
+            select: {
+                id: true,
+                make: true,
+                model: true,
+                year: true,
+                color: true,
+                licensePlate: true,
+                vehicleType: true
             }
         });
 
@@ -240,8 +275,12 @@ router.post('/select', authenticateToken, async (req, res) => {
         });
 
         // Update driver preferences with selected vehicle
+        const currentPreferences = driver.preferences && typeof driver.preferences === 'object'
+            ? driver.preferences
+            : {};
+
         const updatedPreferences = {
-            ...driver.preferences,
+            ...currentPreferences,
             selectedVehicleId: vehicleId,
             vehicleSelectedAt: new Date().toISOString()
         };
@@ -256,30 +295,29 @@ router.post('/select', authenticateToken, async (req, res) => {
         console.log(`🚗 Driver ${userId} selected vehicle ${vehicleId} (${vehicle.make} ${vehicle.model})`);
 
         // Automatically fetch refreshed zones for the selected vehicle
-        const zones = await prisma.zone.findMany({
+        const zones = await prisma.zones.findMany({
             where: {
                 companyId: driver.companyId,
                 isActive: true,
-                vehicleZones: {
+                vehicle_zones: {
                     some: {
                         vehicleId: vehicleId
                     }
                 }
             },
             include: {
-                zoneTariffs: {
+                zone_tariffs: {
                     where: {
-                        tariff: {
+                        tariffs: {
                             isActive: true
                         }
                     },
                     include: {
-                        tariff: {
+                        tariffs: {
                             select: {
                                 id: true,
                                 name: true,
                                 description: true,
-                                vehicleType: true,
                                 baseFare: true,
                                 perKmRate: true,
                                 perMinuteRate: true,
@@ -297,27 +335,51 @@ router.post('/select', authenticateToken, async (req, res) => {
             ]
         });
 
-        const formattedZones = zones.map(zone => ({
-            id: zone.id,
-            name: zone.name,
-            description: zone.description,
-            type: zone.type,
-            boundaries: zone.boundaries,
-            surgeMultiplier: zone.surgeMultiplier ? parseFloat(zone.surgeMultiplier.toString()) : 1,
-            isActive: zone.isActive,
-            tariffCount: zone.zoneTariffs.length,
-            tariffs: zone.zoneTariffs.map(zt => ({
-                zoneTariffId: zt.id,
-                priority: zt.priority,
-                isDefault: zt.isDefault,
-                activeFrom: zt.activeFrom,
-                activeTo: zt.activeTo,
-                daysOfWeek: zt.daysOfWeek,
-                timeFrom: zt.timeFrom,
-                timeTo: zt.timeTo,
-                ...zt.tariff
-            }))
-        }));
+        const formattedZones = zones.map((zone) => {
+            const surgeMultiplier = zone.surgeMultiplier ? toNumber(zone.surgeMultiplier, 1) : 1;
+
+            const tariffs = zone.zone_tariffs.map((zt) => {
+                const tariff = zt.tariffs;
+                const baseFare = toNumber(tariff.baseFare, 0);
+                const perKmRate = toNumber(tariff.perKmRate, 0);
+                const perMinuteRate = toNumber(tariff.perMinuteRate, 0);
+                const minimumFare = toNumber(tariff.minimumFare, 0);
+                const waitingFee = toNumber(tariff.waitingFee, 0);
+
+                return {
+                    zoneTariffId: zt.id,
+                    priority: zt.priority,
+                    isDefault: zt.isDefault,
+                    activeFrom: zt.activeFrom,
+                    activeTo: zt.activeTo,
+                    daysOfWeek: zt.daysOfWeek,
+                    timeFrom: zt.timeFrom,
+                    timeTo: zt.timeTo,
+                    id: tariff.id,
+                    name: tariff.name,
+                    description: tariff.description,
+                    vehicleType: 'SEDAN',
+                    baseFare,
+                    perKmRate,
+                    perMinuteRate,
+                    minimumFare,
+                    waitingFee,
+                    isActive: tariff.isActive
+                };
+            });
+
+            return {
+                id: zone.id,
+                name: zone.name,
+                description: zone.description,
+                type: zone.type,
+                boundaries: zone.boundaries,
+                surgeMultiplier,
+                isActive: zone.isActive,
+                tariffCount: tariffs.length,
+                tariffs
+            };
+        });
 
         console.log(`✅ Vehicle selected and zones refreshed for driver ${userId}`);
 
@@ -331,9 +393,8 @@ router.post('/select', authenticateToken, async (req, res) => {
                     model: vehicle.model,
                     year: vehicle.year,
                     color: vehicle.color,
-                    plateNumber: vehicle.plateNumber,
-                    vehicleType: vehicle.vehicleTypeMaster?.name,
-                    licensePlate: vehicle.licensePlate
+                    licensePlate: vehicle.licensePlate,
+                    vehicleType: vehicle.vehicleType
                 },
                 refreshedZones: formattedZones,
                 zonesRefreshedAt: new Date().toISOString(),

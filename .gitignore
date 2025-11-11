@@ -10,3 +10,4 @@ logs/
 coverage/
 dist/
 build/
+LightsailDefaultKey-ap-southeast-2.pem

@@ -700,7 +700,7 @@ class TaxiSystemDemo {
         where: { driverId: { in: this.demoData.users.filter(u => u.role === 'DRIVER').map(u => u.id) } }
       });
 
-      await prisma.assignment.deleteMany({
+      await prisma.assignments.deleteMany({
         where: { driverId: { in: this.demoData.users.filter(u => u.role === 'DRIVER').map(u => u.id) } }
       });
 
