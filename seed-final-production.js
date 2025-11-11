@@ -197,6 +197,8 @@ async function seedSuperAdmin() {
         id: `user_superadmin_${Date.now()}`,
         email: SUPER_ADMIN_EMAIL,
         password: hashedPassword,
+        firstName: 'Super',
+        lastName: 'Administrator',
         name: 'Super Administrator',
         role: 'SUPER_ADMIN',
         isActive: true,
