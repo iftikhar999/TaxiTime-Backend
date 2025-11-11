@@ -199,10 +199,9 @@ async function seedSuperAdmin() {
         password: hashedPassword,
         firstName: 'Super',
         lastName: 'Administrator',
-        name: 'Super Administrator',
         role: 'SUPER_ADMIN',
         isActive: true,
-        phoneNumber: '+64210000000',
+        phone: '+64210000000',
         createdAt: new Date(),
         updatedAt: new Date()
       }
