@@ -34,60 +34,39 @@ const MASTER_DATA = {
   vehicleTypes: [
     {
       id: 'vtype_sedan',
+      code: 'SEDAN',
       name: 'Sedan',
       description: '4 passengers, 2 bags',
       capacity: 4,
-      luggage: 2,
-      baseRate: 3.50,
-      perKmRate: 2.20,
-      perMinuteRate: 0.60,
-      minimumFare: 10.00,
       icon: 'sedan.png',
-      isActive: true,
-      displayOrder: 1
+      isActive: true
     },
     {
       id: 'vtype_suv',
+      code: 'SUV',
       name: 'SUV',
       description: '6 passengers, 4 bags',
       capacity: 6,
-      luggage: 4,
-      baseRate: 5.00,
-      perKmRate: 3.00,
-      perMinuteRate: 0.80,
-      minimumFare: 15.00,
       icon: 'suv.png',
-      isActive: true,
-      displayOrder: 2
+      isActive: true
     },
     {
       id: 'vtype_van',
+      code: 'VAN',
       name: 'Van',
       description: '8 passengers, 6 bags',
       capacity: 8,
-      luggage: 6,
-      baseRate: 6.50,
-      perKmRate: 3.50,
-      perMinuteRate: 1.00,
-      minimumFare: 20.00,
       icon: 'van.png',
-      isActive: true,
-      displayOrder: 3
+      isActive: true
     },
     {
       id: 'vtype_wheelchair',
+      code: 'WAV',
       name: 'Wheelchair Accessible',
       description: 'WAV with wheelchair access',
       capacity: 4,
-      luggage: 2,
-      baseRate: 5.00,
-      perKmRate: 3.00,
-      perMinuteRate: 0.80,
-      minimumFare: 15.00,
       icon: 'wheelchair.png',
-      isActive: true,
-      displayOrder: 4,
-      features: ['wheelchair_accessible', 'total_mobility']
+      isActive: true
     }
   ],
 
@@ -153,27 +132,96 @@ const MASTER_DATA = {
     { code: 'NO_SHOW', label: 'No Show', description: 'Passenger no show' }
   ],
 
-  globalConfig: {
-    defaultCurrency: 'NZD',
-    defaultTimezone: 'Pacific/Auckland',
-    defaultCountry: 'NZ',
-    maxJobSearchRadius: 50, // km
-    driverLocationUpdateInterval: 10, // seconds - default
-    driverHeartbeatTimeout: 60, // seconds
-    autoDispatchEnabled: true,
-    autoDispatchRadius: 10, // km
-    autoDispatchTimeout: 120, // seconds
-    maxSimultaneousOffers: 5,
-    offerExpiryTime: 30, // seconds
-    gpsAccuracyThreshold: 50, // meters
-    minimumAppVersion: '2.0.0',
-    forceUpdateVersion: '1.9.0',
-    maintenanceMode: false,
-    allowDriverRegistration: false, // Must be approved by company
-    allowPassengerRegistration: true,
-    maxTripsPerDay: 100,
-    maxActiveJobs: 10
-  }
+  globalConfigurations: [
+    {
+      key: 'default_currency',
+      category: 'REGIONAL',
+      displayName: 'Default Currency',
+      description: 'Default currency for the platform',
+      dataType: 'STRING',
+      value: 'NZD'
+    },
+    {
+      key: 'default_timezone',
+      category: 'REGIONAL',
+      displayName: 'Default Timezone',
+      description: 'Default timezone for the platform',
+      dataType: 'STRING',
+      value: 'Pacific/Auckland'
+    },
+    {
+      key: 'default_country',
+      category: 'REGIONAL',
+      displayName: 'Default Country',
+      description: 'Default country code',
+      dataType: 'STRING',
+      value: 'NZ'
+    },
+    {
+      key: 'driver_location_update_interval',
+      category: 'DRIVER',
+      displayName: 'Location Update Interval',
+      description: 'How often drivers should send location updates (seconds)',
+      dataType: 'NUMBER',
+      value: 10
+    },
+    {
+      key: 'driver_heartbeat_timeout',
+      category: 'DRIVER',
+      displayName: 'Heartbeat Timeout',
+      description: 'Driver heartbeat timeout in seconds',
+      dataType: 'NUMBER',
+      value: 60
+    },
+    {
+      key: 'auto_dispatch_enabled',
+      category: 'DISPATCH',
+      displayName: 'Auto Dispatch Enabled',
+      description: 'Enable automatic job dispatching',
+      dataType: 'BOOLEAN',
+      value: true
+    },
+    {
+      key: 'auto_dispatch_radius',
+      category: 'DISPATCH',
+      displayName: 'Auto Dispatch Radius',
+      description: 'Radius for auto dispatch in km',
+      dataType: 'NUMBER',
+      value: 10
+    },
+    {
+      key: 'max_job_search_radius',
+      category: 'JOBS',
+      displayName: 'Max Job Search Radius',
+      description: 'Maximum radius to search for jobs in km',
+      dataType: 'NUMBER',
+      value: 50
+    },
+    {
+      key: 'gps_accuracy_threshold',
+      category: 'GPS',
+      displayName: 'GPS Accuracy Threshold',
+      description: 'Minimum GPS accuracy required in meters',
+      dataType: 'NUMBER',
+      value: 50
+    },
+    {
+      key: 'maintenance_mode',
+      category: 'SYSTEM',
+      displayName: 'Maintenance Mode',
+      description: 'Platform maintenance mode',
+      dataType: 'BOOLEAN',
+      value: false
+    },
+    {
+      key: 'minimum_app_version',
+      category: 'APP',
+      displayName: 'Minimum App Version',
+      description: 'Minimum required app version',
+      dataType: 'STRING',
+      value: '2.0.0'
+    }
+  ]
 };
 
 // ═══════════════════════════════════════════════════════════════
@@ -250,32 +298,39 @@ async function seedPaymentMethods() {
 async function seedGlobalConfig() {
   console.log('\n📍 [4/6] Seeding Global Configuration...');
   
-  try {
-    const config = await prisma.global_configurations.upsert({
-      where: { id: 'global_config_main' },
-      update: {
-        ...MASTER_DATA.globalConfig,
-        updatedAt: new Date()
-      },
-      create: {
-        id: 'global_config_main',
-        ...MASTER_DATA.globalConfig,
-        createdAt: new Date(),
-        updatedAt: new Date()
-      }
-    });
-    
-    console.log('   ✅ Global configuration created');
-    console.log(`   🌍 Default currency: ${config.defaultCurrency}`);
-    console.log(`   🕐 Default timezone: ${config.defaultTimezone}`);
-    console.log(`   📍 GPS update interval: ${config.driverLocationUpdateInterval}s`);
-    
-    return config;
-  } catch (error) {
-    console.error('   ❌ Error creating global config:', error.message);
-    throw error;
+  for (const config of MASTER_DATA.globalConfigurations) {
+    try {
+      await prisma.global_configurations.upsert({
+        where: { key: config.key },
+        update: {
+          category: config.category,
+          displayName: config.displayName,
+          description: config.description,
+          dataType: config.dataType,
+          value: config.value,
+          isActive: true,
+          updatedAt: new Date()
+        },
+        create: {
+          id: `config_${config.key}_${Date.now()}`,
+          key: config.key,
+          category: config.category,
+          displayName: config.displayName,
+          description: config.description,
+          dataType: config.dataType,
+          value: config.value,
+          isActive: true,
+          createdAt: new Date(),
+          updatedAt: new Date()
+        }
+      });
+      console.log(`   ✅ ${config.displayName}`);
+    } catch (error) {
+      console.error(`   ❌ Error creating ${config.displayName}:`, error.message);
+    }
   }
 }
+
 
 async function createDatabaseIndexes() {
   console.log('\n📍 [5/6] Creating Database Indexes...');
