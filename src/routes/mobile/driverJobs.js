@@ -1358,12 +1358,40 @@ router.post('/payment', authenticateToken, async (req, res) => {
             });
         }
 
-        if (job.assignedDriverId !== driverId) {
+        // More flexible driver assignment check
+        // Allow payment collection if:
+        // 1. Job is assigned to this driver (assignedDriverId matches)
+        // 2. Job status is COMPLETED or FINISHED (completed by this driver)
+        // 3. Job has no assignedDriverId but status is COMPLETED (walk-in jobs)
+        const isAssignedDriver = job.assignedDriverId === driverId;
+        const isCompletedStatus = ['COMPLETED', 'FINISHED'].includes(job.status);
+        const isWalkInCompleted = !job.assignedDriverId && isCompletedStatus;
+
+        if (!isAssignedDriver && !isWalkInCompleted) {
+            console.warn('⚠️ [PAYMENT COLLECTION] Driver assignment mismatch', {
+                jobId,
+                requestedDriverId: driverId,
+                assignedDriverId: job.assignedDriverId,
+                jobStatus: job.status,
+            });
+            
             return res.status(403).json({
                 success: false,
-                message: 'You are not assigned to this job',
+                message: 'This job is not assigned to you. Please check if you have the correct job selected.',
+                details: {
+                    jobId,
+                    jobStatus: job.status,
+                    assigned: job.assignedDriverId ? 'different driver' : 'unassigned',
+                },
             });
         }
+
+        console.log('✅ [PAYMENT COLLECTION] Driver validation passed', {
+            jobId,
+            driverId,
+            assignedDriverId: job.assignedDriverId,
+            jobStatus: job.status,
+        });
 
         // Get current shift for driver
         const currentShift = await prisma.shift.findFirst({

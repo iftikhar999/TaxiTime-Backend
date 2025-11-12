@@ -722,6 +722,7 @@ model Job {
   delivery_orders                    delivery_orders?  @relation(fields: [deliveryOrderId], references: [id])
   rides                              rides?            @relation(fields: [tripId], references: [id])
   location_updates                   LocationUpdate[]
+  job_meter_snapshots                job_meter_snapshots[]
   messages                           messages[]
   offers                             offers[]
   payments                           payments[]
@@ -750,6 +751,34 @@ model LocationUpdate {
   rides        rides?    @relation(fields: [tripId], references: [id])
 
   @@map("location_updates")
+}
+
+model job_meter_snapshots {
+  id             String   @id @default(cuid())
+  createdAt      DateTime @default(now())
+  recordedAt     DateTime
+  jobId          String
+  driverId       String
+  companyId      String?
+  status         String?
+  reason         String?  @default("interval")
+  elapsedSeconds Int      @default(0)
+  waitingSeconds Int      @default(0)
+  distanceMeters Float    @default(0)
+  currentFare    Float?
+  speedKmh       Float?
+  isPaused       Boolean  @default(false)
+  latitude       Float?
+  longitude      Float?
+  accuracy       Float?
+  heading        Float?
+  routeSegment   Json?
+  users          User     @relation(fields: [driverId], references: [id])
+  jobs           Job      @relation(fields: [jobId], references: [id])
+  companies      companies? @relation(fields: [companyId], references: [id])
+
+  @@index([jobId, recordedAt], map: "job_meter_snapshots_jobId_recordedAt_idx")
+  @@map("job_meter_snapshots")
 }
 
 model merchants {

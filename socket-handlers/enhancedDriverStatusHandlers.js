@@ -1761,4 +1761,65 @@ module.exports = (io, socket, driverId, companyId, queueService) => {
             console.error('Failed to process meter telemetry:', error);
         }
     });
+
+    socket.on('meter:snapshot', async (payload = {}) => {
+        try {
+            const { jobId, telemetry, location, routeSegment } = payload;
+
+            if (!jobId || !telemetry) {
+                console.warn('meter:snapshot: missing jobId or telemetry');
+                return;
+            }
+
+            const recordedAt = safeDate(payload.recordedAt) || new Date();
+            const normalizedSegment =
+                Array.isArray(routeSegment) && routeSegment.length
+                    ? routeSegment
+                          .map((point) => {
+                              const latitude = sanitizeNumber(point.latitude);
+                              const longitude = sanitizeNumber(point.longitude);
+
+                              if (latitude === null || longitude === null) {
+                                  return null;
+                              }
+
+                              const timestamp =
+                                  point.timestamp !== undefined && point.timestamp !== null
+                                      ? safeDate(point.timestamp) || new Date(point.timestamp)
+                                      : null;
+
+                              return {
+                                  latitude,
+                                  longitude,
+                                  timestamp: timestamp ? timestamp.toISOString() : null,
+                              };
+                          })
+                          .filter(Boolean)
+                    : null;
+
+            await prisma.job_meter_snapshots.create({
+                data: {
+                    jobId,
+                    driverId,
+                    companyId,
+                    recordedAt,
+                    status: payload.status ? String(payload.status).toUpperCase() : null,
+                    reason: payload.reason || 'interval',
+                    elapsedSeconds: Math.max(0, Math.round(telemetry.elapsedSeconds || 0)),
+                    waitingSeconds: Math.max(0, Math.round(telemetry.waitingSeconds || 0)),
+                    distanceMeters: Number(telemetry.distanceMeters || 0),
+                    currentFare: telemetry.currentFare !== undefined ? Number(telemetry.currentFare) : null,
+                    speedKmh: telemetry.speedKmh !== undefined ? Number(telemetry.speedKmh) : null,
+                    isPaused: !!payload.isPaused,
+                    latitude: sanitizeNumber(location?.latitude),
+                    longitude: sanitizeNumber(location?.longitude),
+                    accuracy: sanitizeNumber(location?.accuracy),
+                    heading: sanitizeNumber(location?.heading),
+                    routeSegment: normalizedSegment,
+                },
+            });
+        } catch (error) {
+            console.error('Failed to persist meter snapshot:', error);
+        }
+    });
 };
