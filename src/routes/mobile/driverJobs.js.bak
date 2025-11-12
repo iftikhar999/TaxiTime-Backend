@@ -302,7 +302,7 @@ router.get('/current', authenticateToken, async (req, res) => {
     }
 
     try {
-        logger.info(`🔍 Fetching current job for driver: ${driverId}`);
+        console.log(`🔍 Fetching current job for driver: ${driverId}`);
         
         // Find any active/in-progress job for this driver
         const job = await prisma.job.findFirst({
@@ -335,14 +335,14 @@ router.get('/current', authenticateToken, async (req, res) => {
         });
 
         if (!job) {
-            logger.info(`ℹ️ No active job found for driver: ${driverId}`);
+            console.log(`ℹ️ No active job found for driver: ${driverId}`);
             return res.json({
                 success: true,
                 job: null,
             });
         }
 
-        logger.info(`✅ Found active job for driver: ${job.id}, status: ${job.status}`);
+        console.log(`✅ Found active job for driver: ${job.id}, status: ${job.status}`);
 
         // Build response
         const customer = job.users_jobs_customerIdTousers;
@@ -379,7 +379,7 @@ router.get('/current', authenticateToken, async (req, res) => {
         });
 
     } catch (error) {
-        logger.error('❌ Error fetching current job:', error);
+        console.error('❌ Error fetching current job:', error);
         res.status(500).json({
             success: false,
             error: 'Failed to fetch current job',
@@ -572,7 +572,7 @@ router.get('/history', authenticateToken, async (req, res) => {
     };
 
     try {
-        logger.info(`📋 [Job History] Request from driver ${driverId}, page ${parsedPage}, limit ${parsedLimit}`);
+        console.log(`📋 [Job History] Request from driver ${driverId}, page ${parsedPage}, limit ${parsedLimit}`);
 
         // Query completed jobs with safe error handling
         const [jobs, totalCount] = await Promise.all([
@@ -621,19 +621,19 @@ router.get('/history', authenticateToken, async (req, res) => {
                     },
                 },
             }).catch(err => {
-                logger.error('❌ [Job History] Query error:', err);
+                console.error('❌ [Job History] Query error:', err);
                 throw new Error('Failed to fetch job history from database');
             }),
             
             prisma.job.count({
                 where: historyWhereClause,
             }).catch(err => {
-                logger.error('❌ [Job History] Count error:', err);
+                console.error('❌ [Job History] Count error:', err);
                 return 0; // Return 0 if count fails
             })
         ]);
 
-        logger.info(`✅ [Job History] Found ${jobs?.length || 0} jobs, total count: ${totalCount}`);
+        console.log(`✅ [Job History] Found ${jobs?.length || 0} jobs, total count: ${totalCount}`);
 
         const toNumberSafe = (value, fallback = 0) =>
             value === null || value === undefined ? fallback : Number(value);
@@ -765,7 +765,7 @@ router.get('/history', authenticateToken, async (req, res) => {
                     statusTimeline,
                 };
             } catch (mapError) {
-                logger.error(`❌ [Job History] Error mapping job ${job?.id}:`, mapError);
+                console.error(`❌ [Job History] Error mapping job ${job?.id}:`, mapError);
                 return null;
             }
         }).filter(Boolean); // Remove any null entries
@@ -788,10 +788,10 @@ router.get('/history', authenticateToken, async (req, res) => {
             },
         });
     } catch (error) {
-        logger.error('❌ [Job History] Fatal error:', error);
-        logger.error('   Driver ID:', driverId);
-        logger.error('   Error details:', error.message);
-        logger.error('   Stack:', error.stack);
+        console.error('❌ [Job History] Fatal error:', error);
+        console.error('   Driver ID:', driverId);
+        console.error('   Error details:', error.message);
+        console.error('   Stack:', error.stack);
         
         res.status(500).json({
             success: false,
@@ -868,7 +868,7 @@ router.get('/recent', authenticateToken, async (req, res) => {
             data: summaries,
         });
     } catch (error) {
-        logger.error('❌ [Driver Recent Jobs] Fatal error:', error);
+        console.error('❌ [Driver Recent Jobs] Fatal error:', error);
         res.status(500).json({
             success: false,
             message: 'Unable to load recent jobs. Please try again later.',
@@ -1010,7 +1010,7 @@ router.get('/rides/history', authenticateToken, async (req, res) => {
             },
         });
     } catch (error) {
-        logger.error('Failed to fetch driver job history:', error);
+        console.error('Failed to fetch driver job history:', error);
         res.status(500).json({
             success: false,
             message: 'Unable to load ride history',
@@ -1034,7 +1034,7 @@ router.get('/upcoming', authenticateToken, async (req, res) => {
     }
 
     try {
-        logger.info(`📡 [/upcoming] Request from driver ${driverId}`);
+        console.log(`📡 [/upcoming] Request from driver ${driverId}`);
         
         // ✅ OPTIMIZATION: Get driver data from auth token to avoid extra DB query
         const driver = req.user;
@@ -1045,7 +1045,7 @@ router.get('/upcoming', authenticateToken, async (req, res) => {
             null;
 
         if (!companyId) {
-            logger.warn(`❌ [/upcoming] Unable to resolve company for driver ${driverId}`);
+            console.warn(`❌ [/upcoming] Unable to resolve company for driver ${driverId}`);
             return res.json({ success: true, data: [] });
         }
         
@@ -1078,7 +1078,7 @@ router.get('/upcoming', authenticateToken, async (req, res) => {
         }
 
         if (!currentZoneId) {
-            logger.info(`📡 [/upcoming] No zone for driver ${driverId}, returning empty`);
+            console.log(`📡 [/upcoming] No zone for driver ${driverId}, returning empty`);
             return res.json({ success: true, data: [] });
         }
 
@@ -1089,14 +1089,14 @@ router.get('/upcoming', authenticateToken, async (req, res) => {
         });
 
         if (!zoneRecord) {
-            logger.info(`📡 [/upcoming] Zone ${currentZoneId} not found`);
+            console.log(`📡 [/upcoming] Zone ${currentZoneId} not found`);
             return res.json({ success: true, data: [] });
         }
 
         const zonePolygons = normaliseZonePolygons(zoneRecord.boundaries);
 
         if (zonePolygons.length === 0) {
-            logger.info(`📡 [/upcoming] Zone ${currentZoneId} has no polygons`);
+            console.log(`📡 [/upcoming] Zone ${currentZoneId} has no polygons`);
             return res.json({ success: true, data: [] });
         }
 
@@ -1200,7 +1200,7 @@ router.get('/upcoming', authenticateToken, async (req, res) => {
             data: filtered.slice(0, 10),
         });
     } catch (error) {
-        logger.error('Failed to fetch upcoming jobs for driver:', error);
+        console.error('Failed to fetch upcoming jobs for driver:', error);
         res.status(500).json({
             success: false,
             message: 'Unable to load upcoming jobs',
@@ -1216,10 +1216,10 @@ router.post('/:jobId/claim', authenticateToken, async (req, res) => {
     const driverId = req.user?.id;
     const { jobId } = req.params;
 
-    logger.info('🚀 [CLAIM JOB ROUTE] Request received', { jobId, driverId, userId: req.user?.id });
+    console.log('🚀 [CLAIM JOB ROUTE] Request received', { jobId, driverId, userId: req.user?.id });
 
     if (!driverId) {
-        logger.error('❌ [CLAIM JOB ROUTE] No driver ID found');
+        console.error('❌ [CLAIM JOB ROUTE] No driver ID found');
         return res.status(401).json({
             success: false,
             message: 'Driver authentication required',
@@ -1227,12 +1227,12 @@ router.post('/:jobId/claim', authenticateToken, async (req, res) => {
     }
 
     try {
-        logger.info('🚀 [CLAIM JOB ROUTE] Calling jobService.claimJob');
+        console.log('🚀 [CLAIM JOB ROUTE] Calling jobService.claimJob');
         const result = await jobService.claimJob(jobId, driverId, req.io);
-        logger.info('✅ [CLAIM JOB ROUTE] Success, sending response', { hasResult: !!result });
+        console.log('✅ [CLAIM JOB ROUTE] Success, sending response', { hasResult: !!result });
         res.json({ success: true, data: result });
     } catch (error) {
-        logger.error('❌ [CLAIM JOB ROUTE] Error caught:', {
+        console.error('❌ [CLAIM JOB ROUTE] Error caught:', {
             message: error?.message,
             stack: error?.stack,
             name: error?.name
@@ -1267,7 +1267,7 @@ router.post('/payment', authenticateToken, async (req, res) => {
         dropoffLocation = null,
     } = req.body;
 
-    logger.info('💰 [PAYMENT COLLECTION] Request received', { 
+    console.log('💰 [PAYMENT COLLECTION] Request received', { 
         jobId, 
         driverId, 
         amount, 
@@ -1310,7 +1310,7 @@ router.post('/payment', authenticateToken, async (req, res) => {
             ? Math.max(Math.round(metricDurationSeconds / 60), 1)
             : null);
 
-    logger.info('🧮 [PAYMENT COLLECTION] Meter payload summary', {
+    console.log('🧮 [PAYMENT COLLECTION] Meter payload summary', {
         jobId,
         distanceKm: metricDistanceKm,
         durationSeconds: metricDurationSeconds,
@@ -1369,7 +1369,7 @@ router.post('/payment', authenticateToken, async (req, res) => {
         const isWalkInCompleted = !job.assignedDriverId && isCompletedStatus;
 
         if (!isAssignedDriver && !isWalkInCompleted) {
-            logger.warn('⚠️ [PAYMENT COLLECTION] Driver assignment mismatch', {
+            console.warn('⚠️ [PAYMENT COLLECTION] Driver assignment mismatch', {
                 jobId,
                 requestedDriverId: driverId,
                 assignedDriverId: job.assignedDriverId,
@@ -1387,7 +1387,7 @@ router.post('/payment', authenticateToken, async (req, res) => {
             });
         }
 
-        logger.info('✅ [PAYMENT COLLECTION] Driver validation passed', {
+        console.log('✅ [PAYMENT COLLECTION] Driver validation passed', {
             jobId,
             driverId,
             assignedDriverId: job.assignedDriverId,
@@ -1572,21 +1572,21 @@ router.post('/payment', authenticateToken, async (req, res) => {
                     },
                 });
             } catch (earningsError) {
-                logger.error('⚠️ [PAYMENT COLLECTION] Failed to record earnings (non-critical):', earningsError);
+                console.error('⚠️ [PAYMENT COLLECTION] Failed to record earnings (non-critical):', earningsError);
                 // Don't fail the payment if earnings recording fails
             }
         } else {
-            logger.warn('⚠️ [PAYMENT COLLECTION] EarningsService not available on request');
+            console.warn('⚠️ [PAYMENT COLLECTION] EarningsService not available on request');
         }
 
-        logger.info('✅ [PAYMENT COLLECTION] Payment recorded successfully', {
+        console.log('✅ [PAYMENT COLLECTION] Payment recorded successfully', {
             paymentId: payment.id,
             amount: amountValue,
             driverEarnings,
             companyCommission,
         });
 
-        logger.info('🧾 [PAYMENT COLLECTION] Persisted completion metrics', {
+        console.log('🧾 [PAYMENT COLLECTION] Persisted completion metrics', {
             jobId,
             actualDistanceKm: jobUpdateData.actualDistanceKm ?? metricDistanceKm ?? null,
             actualDurationSeconds:
@@ -1609,7 +1609,7 @@ router.post('/payment', authenticateToken, async (req, res) => {
             message: 'Payment recorded successfully',
         });
     } catch (error) {
-        logger.error('❌ [PAYMENT COLLECTION] Error:', {
+        console.error('❌ [PAYMENT COLLECTION] Error:', {
             message: error?.message,
             stack: error?.stack,
         });
@@ -1631,7 +1631,7 @@ router.post('/walk-in/create', authenticateToken, async (req, res) => {
     }
 
     try {
-        logger.info(`🚶 Creating walk-in job (NOW job) for driver ${driverId}`);
+        console.log(`🚶 Creating walk-in job (NOW job) for driver ${driverId}`);
         
         // Get driver details
         const driver = await prisma.user.findUnique({
@@ -1674,7 +1674,7 @@ router.post('/walk-in/create', authenticateToken, async (req, res) => {
         const selectedVehicleId = driverPrefs?.selectedVehicleId || null;
         const selectedTariffId = driverPrefs?.selectedTariffId || null;
         
-        logger.info(`📝 Walk-in job details: vehicleId=${selectedVehicleId}, tariffId=${selectedTariffId}, hasPrefs=${!!driverPrefs}`);
+        console.log(`📝 Walk-in job details: vehicleId=${selectedVehicleId}, tariffId=${selectedTariffId}, hasPrefs=${!!driverPrefs}`);
 
         // ✅ FIX: Get driver's current location from LocationUpdate table (real-time GPS data)
         let lastLocation = await prisma.locationUpdate.findFirst({
@@ -1686,7 +1686,7 @@ router.post('/walk-in/create', authenticateToken, async (req, res) => {
         const jsonPrefs = driver.preferences || {}; // ✅ FIX: Define at correct scope
 
         if (!lastLocation || !lastLocation.latitude || !lastLocation.longitude) {
-            logger.info(`⚠️ No location found for driver ${driverId} - checking JSON preferences fallback`);
+            console.log(`⚠️ No location found for driver ${driverId} - checking JSON preferences fallback`);
             
             // Fallback to JSON preferences if LocationUpdate not available
             const currentLocation = jsonPrefs.lastLocation || jsonPrefs.currentLocation || {};
@@ -1710,7 +1710,7 @@ router.post('/walk-in/create', authenticateToken, async (req, res) => {
         const pickupLatitude = lastLocation.latitude;
         const pickupLongitude = lastLocation.longitude;
         
-        logger.info(`📍 Using location: lat=${pickupLatitude}, lng=${pickupLongitude}, address=${pickupAddress}`);
+        console.log(`📍 Using location: lat=${pickupLatitude}, lng=${pickupLongitude}, address=${pickupAddress}`);
 
         const now = new Date();
         const rideId = `WALKIN-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -1808,7 +1808,7 @@ router.post('/walk-in/create', authenticateToken, async (req, res) => {
         });
 
         const { ride, job } = result;
-        logger.info(`✅ Walk-in ride created: ${ride.id}, job: ${job.id}, type: NOW (scheduledAt: null)`);
+        console.log(`✅ Walk-in ride created: ${ride.id}, job: ${job.id}, type: NOW (scheduledAt: null)`);
 
         // Return the job with full details
         res.json({
@@ -1842,7 +1842,7 @@ router.post('/walk-in/create', authenticateToken, async (req, res) => {
         });
 
     } catch (error) {
-        logger.error('❌ Error creating walk-in job:', error);
+        console.error('❌ Error creating walk-in job:', error);
         res.status(500).json({
             error: 'Failed to create walk-in job',
             details: error.message,
@@ -1862,7 +1862,7 @@ router.get('/stats/today', authenticateToken, async (req, res) => {
     }
 
     try {
-        logger.info(`📊 Fetching today's stats for driver: ${driverId}`);
+        console.log(`📊 Fetching today's stats for driver: ${driverId}`);
         
         // Get today's start and end times in UTC
         const now = new Date();
@@ -1871,7 +1871,7 @@ router.get('/stats/today', authenticateToken, async (req, res) => {
         const todayEnd = new Date(now);
         todayEnd.setHours(23, 59, 59, 999);
 
-        logger.info(`📊 Date range: ${todayStart.toISOString()} to ${todayEnd.toISOString()}`);
+        console.log(`📊 Date range: ${todayStart.toISOString()} to ${todayEnd.toISOString()}`);
 
         // ✅ FIX: Query COMPLETED jobs using completedAt field
         const todaysJobs = await prisma.job.findMany({
@@ -1911,7 +1911,7 @@ router.get('/stats/today', authenticateToken, async (req, res) => {
             },
         });
 
-        logger.info(`📊 Found ${todaysJobs.length} completed jobs for today`);
+        console.log(`📊 Found ${todaysJobs.length} completed jobs for today`);
 
         // ✅ Calculate earnings from passenger-facing totals (before commission)
         const totalJobs = todaysJobs.length;
@@ -1927,7 +1927,7 @@ router.get('/stats/today', authenticateToken, async (req, res) => {
             return sum + passengerTotal;
         }, 0);
 
-        logger.info(`📊 Total jobs: ${totalJobs}, Total earnings: $${totalEarnings.toFixed(2)}`);
+        console.log(`📊 Total jobs: ${totalJobs}, Total earnings: $${totalEarnings.toFixed(2)}`);
 
         res.json({
             success: true,
@@ -1939,8 +1939,8 @@ router.get('/stats/today', authenticateToken, async (req, res) => {
         });
 
     } catch (error) {
-        logger.error('❌ Error fetching today stats:', error);
-        logger.error('Stack:', error.stack);
+        console.error('❌ Error fetching today stats:', error);
+        console.error('Stack:', error.stack);
         
         // ✅ Return empty stats instead of error to prevent app crash
         res.json({
