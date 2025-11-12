@@ -9,6 +9,9 @@ const { createServer } = require('http');
 const { Server } = require('socket.io');
 require('dotenv').config();
 
+// IMPORTANT: Initialize logger FIRST to override console methods globally
+const logger = require('./utils/logger');
+
 // Import services
 const TrackingService = require('./services/trackingService');
 const AutoDispatchService = require('./services/autoDispatchService');

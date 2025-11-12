@@ -10,6 +10,10 @@
  *   logger.error('Error', error);
  *   logger.warn('Warning');
  *   logger.debug('Debug info');
+ * 
+ * GLOBAL OVERRIDE:
+ *   When ENABLE_LOGGING=false, this module also overrides console.log/error/warn
+ *   to prevent any logs from being output, saving bandwidth in production.
  */
 
 const ENABLE_LOGGING = process.env.ENABLE_LOGGING !== 'false';
@@ -23,6 +27,15 @@ const LOG_LEVELS = {
 };
 
 const currentLogLevel = LOG_LEVELS[LOG_LEVEL] || LOG_LEVELS.info;
+
+// Store original console methods before overriding
+const originalConsole = {
+    log: console.log,
+    error: console.error,
+    warn: console.warn,
+    info: console.info,
+    debug: console.debug,
+};
 
 /**
  * Format log message with timestamp and context
@@ -49,25 +62,25 @@ function log(level, message, data) {
     switch (level) {
         case 'error':
             if (data !== undefined) {
-                console.error(formattedMessage, data);
+                originalConsole.error(formattedMessage, data);
             } else {
-                console.error(formattedMessage);
+                originalConsole.error(formattedMessage);
             }
             break;
         case 'warn':
             if (data !== undefined) {
-                console.warn(formattedMessage, data);
+                originalConsole.warn(formattedMessage, data);
             } else {
-                console.warn(formattedMessage);
+                originalConsole.warn(formattedMessage);
             }
             break;
         case 'debug':
         case 'info':
         default:
             if (data !== undefined) {
-                console.log(formattedMessage, data);
+                originalConsole.log(formattedMessage, data);
             } else {
-                console.log(formattedMessage);
+                originalConsole.log(formattedMessage);
             }
             break;
     }
@@ -105,12 +118,20 @@ const logger = {
     getLevel: () => LOG_LEVEL,
 };
 
-// Log initialization info (only once on startup)
-if (ENABLE_LOGGING) {
-    console.log(`[LOGGER] Initialized - ENABLE_LOGGING=${ENABLE_LOGGING}, LOG_LEVEL=${LOG_LEVEL}`);
+// GLOBAL CONSOLE OVERRIDE
+// When logging is disabled, replace console methods with no-ops
+if (!ENABLE_LOGGING) {
+    const noop = () => {};
+    console.log = noop;
+    console.error = noop;
+    console.warn = noop;
+    console.info = noop;
+    console.debug = noop;
+    
+    // Use original console for initialization message
+    originalConsole.log('[LOGGER] Silent mode enabled - all console output disabled (ENABLE_LOGGING=false)');
 } else {
-    // Silent mode - no logs at all
-    console.log('[LOGGER] Silent mode enabled - all logs disabled');
+    originalConsole.log(`[LOGGER] Initialized - ENABLE_LOGGING=${ENABLE_LOGGING}, LOG_LEVEL=${LOG_LEVEL}`);
 }
 
 module.exports = logger;
