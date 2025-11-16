@@ -106,6 +106,7 @@ class QueueManagementService {
                 isActive: true,
                 companyId: true,
                 preferences: true,
+                currentJobId: true,
                 firstName: true,
                 lastName: true,
             },
@@ -663,6 +664,7 @@ class QueueManagementService {
             driverId,
             companyId: driver.companyId,
             status,
+            currentJobId: driver.currentJobId ?? dispatchMeta.currentJobId ?? null,
             zone: zoneMeta
                 ? {
                     id: zoneMeta.id || null,

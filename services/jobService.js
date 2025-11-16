@@ -19,6 +19,54 @@ const getNamespace = (key) => {
   }
 };
 
+const ACTIVE_DRIVER_JOB_STATUSES = new Set([
+  'OFFERED',
+  'ASSIGNED',
+  'ACCEPTED',
+  'ON_THE_WAY',
+  'ARRIVED',
+  'STARTED',
+  'ACTIVE',
+  'IN_PROGRESS',
+  'REACHED',
+]);
+
+const TERMINAL_DRIVER_JOB_STATUSES = new Set([
+  'COMPLETED',
+  'FINISHED',
+  'CANCELLED',
+  'CANCELED',
+  'REJECTED',
+  'NOSHOW',
+  'NO_SHOW',
+  'RECALL',
+  'RECALLED',
+  'UNASSIGNED',
+  'PENDING',
+]);
+
+const updateDriverCurrentJobReference = async (client, driverId, jobId = null) => {
+  if (!driverId) {
+    return;
+  }
+
+  const prismaClient = client || prisma;
+
+  try {
+    await prismaClient.user.update({
+      where: { id: driverId },
+      data: {
+        currentJobId: jobId ?? null,
+      },
+    });
+  } catch (error) {
+    console.warn(
+      `[JobService] Failed to update current job reference for driver ${driverId}:`,
+      error?.message || error
+    );
+  }
+};
+
 class JobService {
   constructor() {
     this.offerExpiryTimers = new Map();
@@ -812,7 +860,7 @@ class JobService {
         });
       }
 
-      await prisma.job.update({
+      const updatedJobRecord = await prisma.job.update({
         where: { id: jobId },
         data: {
           status: 'OFFERED',
@@ -820,6 +868,8 @@ class JobService {
           updatedAt: new Date(),
         },
       });
+
+      await updateDriverCurrentJobReference(prisma, driverId, jobId);
 
       // Log the assignment action
       await jobAuditService.logAssignment(
@@ -853,7 +903,7 @@ class JobService {
       }
 
       const jobForPayload = {
-        ...job,
+        ...(updatedJobRecord || job),
         status: 'OFFERED',
         assignedDriverId: driverId,
       };
@@ -1480,8 +1530,9 @@ class JobService {
       };
       const normalizedStatus =
         typeof status === 'string' ? status.trim().toUpperCase() : null;
+      const targetStatus = normalizedStatus || status;
 
-      if (normalizedStatus === 'RECALL' || normalizedStatus === 'RECALLED') {
+      if (targetStatus === 'RECALL' || targetStatus === 'RECALLED') {
         const existingJob = await prisma.job.findUnique({
           where: { id: jobId },
           include: {
@@ -1543,6 +1594,8 @@ class JobService {
           });
         }
 
+        await updateDriverCurrentJobReference(prisma, driverToRelease, null);
+
         this.clearOfferExpiryTimer(jobId);
         return normalizeJobRecord(updatedJobRecord);
       }
@@ -1550,7 +1603,7 @@ class JobService {
       const jobRecord = await prisma.job.update({
         where: { id: jobId },
         data: {
-          status: status,
+          status: targetStatus,
           updatedAt: new Date(),
         },
         include: {
@@ -1585,7 +1638,13 @@ class JobService {
       }
 
       // Handle status-specific logic
-      switch (status) {
+      if (ACTIVE_DRIVER_JOB_STATUSES.has(targetStatus) && job.assignedDriverId) {
+        await updateDriverCurrentJobReference(prisma, job.assignedDriverId, job.id);
+      } else if (TERMINAL_DRIVER_JOB_STATUSES.has(targetStatus)) {
+        await updateDriverCurrentJobReference(prisma, job.assignedDriverId || driverId, null);
+      }
+
+      switch (targetStatus) {
         case 'STARTED':
           // Driver started driving to pickup
           await this.handleJobStarted(job);
@@ -1893,6 +1952,9 @@ class JobService {
       });
 
       console.log(`✅ Job ${jobId} unassigned from driver ${previousDriverId} by ${dispatcherId}`);
+
+      await updateDriverCurrentJobReference(prisma, previousDriverId, null);
+
       const normalizedJob = {
         ...updatedJob,
         customer: updatedJob.users_jobs_customerIdTousers ?? null,

@@ -7,6 +7,8 @@
 const cron = require('node-cron');
 const { checkDriverActivity } = require('./driverActivityMonitor');
 
+const CRON_FORCE_BUSY_ENABLED = process.env.CRON_FORCE_BUSY_ENABLED === 'true';
+
 let io = null;
 let driverActivityJob = null;
 
@@ -16,8 +18,13 @@ let driverActivityJob = null;
  */
 function initializeCronJobs(socketIO) {
   io = socketIO;
-  
+
   console.log('[Cron Manager] Initializing cron jobs...');
+
+  if (!CRON_FORCE_BUSY_ENABLED) {
+    console.log('[Cron Manager] ⚠️ Driver Activity Monitor disabled (CRON_FORCE_BUSY_ENABLED=false)');
+    return;
+  }
 
   // Driver Activity Monitor - runs every minute
   driverActivityJob = cron.schedule('* * * * *', async () => {
@@ -65,8 +72,10 @@ function getCronJobsStatus() {
   return {
     driverActivityMonitor: {
       active: driverActivityJob ? true : false,
-      schedule: 'Every minute (* * * * *)',
-      description: 'Monitors driver location updates and sets inactive drivers offline'
+      schedule: CRON_FORCE_BUSY_ENABLED ? 'Every minute (* * * * *)' : 'Disabled',
+      description: CRON_FORCE_BUSY_ENABLED
+        ? 'Monitors driver location updates and sets inactive drivers offline'
+        : 'Disabled via CRON_FORCE_BUSY_ENABLED environment variable'
     }
   };
 }

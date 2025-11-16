@@ -933,6 +933,7 @@ const getDispatchDriversHandler = async (req, res) => {
           lastName: true,
           phone: true,
           email: true,
+          currentJobId: true,
           preferences: true,
           rating: true,
           updatedAt: true,
@@ -1106,7 +1107,7 @@ const getDispatchDriversHandler = async (req, res) => {
         currentZoneName: currentZone?.name || zoneInfo?.name || null,
         queuePosition,
         rating: ratingValue,
-        currentJobId: activeAssignment?.jobId || null,
+        currentJobId: driver.currentJobId || activeAssignment?.jobId || null,
       };
     });
 

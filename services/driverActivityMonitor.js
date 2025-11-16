@@ -12,12 +12,23 @@ const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 
 const INACTIVITY_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes in milliseconds
+const CRON_FORCE_BUSY_ENABLED = process.env.CRON_FORCE_BUSY_ENABLED === 'true';
 
 /**
  * Check all active drivers for inactivity
  * @param {object} io - Socket.IO instance for emitting events
  */
 async function checkDriverActivity(io) {
+  if (!CRON_FORCE_BUSY_ENABLED) {
+    console.log('[Driver Activity Monitor] Skipped - CRON_FORCE_BUSY_ENABLED=false');
+    return {
+      checked: new Date(),
+      inactiveCount: 0,
+      processed: [],
+      skipped: true,
+    };
+  }
+
   try {
     const now = new Date();
     const thresholdTime = new Date(now.getTime() - INACTIVITY_THRESHOLD_MS);
@@ -64,6 +75,8 @@ async function checkDriverActivity(io) {
     const inactiveDrivers = [];
     
     for (const driver of allDrivers) {
+      const hasActiveJob = driver.jobs_jobs_assignedDriverIdTousers?.length > 0;
+
       // Check multiple sources for last activity time
       const lastLocationUpdate = driver.location_updates[0];
       const locationUpdateTime = lastLocationUpdate 
@@ -88,7 +101,7 @@ async function checkDriverActivity(io) {
         ? new Date(Math.max(...activityTimes.map(t => t.getTime())))
         : null;
       
-      const isInactive = !lastActivityTime || lastActivityTime < thresholdTime;
+      const isInactive = (!lastActivityTime || lastActivityTime < thresholdTime) && !hasActiveJob;
       
       console.log(`[Driver Activity Monitor] ${driver.firstName} ${driver.lastName}:`);
       console.log(`  - Location Update: ${locationUpdateTime ? locationUpdateTime.toISOString() : 'Never'}`);
@@ -98,6 +111,11 @@ async function checkDriverActivity(io) {
       console.log(`  - Last Activity: ${lastActivityTime ? lastActivityTime.toISOString() : 'Never'}`);
       console.log(`  - Inactive: ${isInactive}`);
       
+      if (hasActiveJob) {
+        console.log(`[Driver Activity Monitor] Skipping driver ${driver.id} - currently has active job`);
+        continue;
+      }
+
       if (isInactive) {
         inactiveDrivers.push(driver);
       }
@@ -179,6 +197,13 @@ async function checkDriverActivity(io) {
               assignedDriverId: null,
               updatedAt: now
             }
+          });
+
+          await prisma.user.update({
+            where: { id: driver.id },
+            data: {
+              currentJobId: null,
+            },
           });
 
           unassignedJobs.push({

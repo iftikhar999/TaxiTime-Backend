@@ -726,6 +726,7 @@ model Job {
   messages                           messages[]
   offers                             offers[]
   payments                           payments[]
+  userCurrentJobs                    User[]             @relation("user_current_job")
 
   @@index([assignedDriverId, updatedAt])
   @@map("jobs")
@@ -1196,6 +1197,7 @@ model User {
   preferences                                             Json?
   rating                                                  Json?
   companyId                                               String?
+  currentJobId                                            String?
   alarms                                                  alarms[]
   assignments                                             assignments[]
   companies_companies_ownerIdTousers                      companies?                  @relation("companies_ownerIdTousers")
@@ -1207,6 +1209,7 @@ model User {
   driver_earnings                                         driver_earnings[]
   driver_earnings_summaries                               driver_earnings_summaries[]
   driver_preferences                                      driver_preferences?
+  currentJob                                              Job?                        @relation("user_current_job", fields: [currentJobId], references: [id])
   jobs_jobs_assignedDriverIdTousers                       Job[]                       @relation("jobs_assignedDriverIdTousers")
   jobs_jobs_customerIdTousers                             Job[]                       @relation("jobs_customerIdTousers")
   location_updates                                        LocationUpdate[]
@@ -1229,6 +1232,7 @@ model User {
   companies_users_companyIdTocompanies                    companies?                  @relation("users_companyIdTocompanies", fields: [companyId], references: [id])
   wallet_transactions                                     wallet_transactions[]
 
+  @@index([currentJobId], map: "users_currentJobId_idx")
   @@map("users")
 }
 
