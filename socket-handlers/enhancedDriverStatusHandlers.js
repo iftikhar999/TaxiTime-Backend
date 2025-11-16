@@ -153,6 +153,10 @@ const ACTIVE_DRIVER_JOB_STATUSES = new Set([
 ]);
 
 const COMPLETION_STATUSES = new Set(['COMPLETED', 'FINISHED']);
+const TERMINAL_DRIVER_JOB_STATUSES = new Set([
+    ...COMPLETION_STATUSES,
+    ...clearDriverFromJobStatuses,
+]);
 
 const normalizeJobStatus = (status) => {
     if (!status) {
@@ -185,6 +189,26 @@ const safeClone = (value, fallback = {}) => {
     } catch (error) {
         console.warn('Failed to clone JSON payload for dispatch metadata:', error?.message || error);
         return { ...fallback };
+    }
+};
+
+const updateDriverCurrentJob = async (driverId, jobId = null) => {
+    if (!driverId) {
+        return;
+    }
+
+    try {
+        await prisma.user.update({
+            where: { id: driverId },
+            data: {
+                currentJobId: jobId ?? null,
+            },
+        });
+    } catch (error) {
+        console.warn(
+            `[Socket] Failed to update current job reference for driver ${driverId}:`,
+            error?.message || error
+        );
     }
 };
 
@@ -303,6 +327,7 @@ const buildStatusPayload = ({
     jobId,
     location,
     dispatch,
+    currentJobId,
 }) => ({
     driverId,
     companyId,
@@ -310,6 +335,7 @@ const buildStatusPayload = ({
     driverStatus: status,
     reason: reason || 'socket_update',
     jobId: jobId ?? null,
+    currentJobId: currentJobId ?? dispatch?.currentJobId ?? jobId ?? null,
     location: location ?? undefined,
     queuePosition: dispatch?.queuePosition ?? dispatch?.zone?.queuePosition ?? null,
     zone: dispatch?.zone ?? null,
@@ -396,6 +422,7 @@ const buildJobProgressPayload = ({
     jobId,
     progressStatus,
     metrics,
+    currentJobId: dispatch?.currentJobId ?? jobId ?? null,
     queuePosition: dispatch?.queuePosition ?? dispatch?.zone?.queuePosition ?? null,
     dispatch: dispatch ?? undefined,
     timestamp: timestampNow(),
@@ -700,6 +727,7 @@ module.exports = (io, socket, driverId, companyId, queueService) => {
             const status = normalizeStatus(
                 payload.newStatus ?? payload.status ?? payload.driverStatus,
             );
+            const eventId = payload.eventId ?? null;
 
             if (!status) {
                 return;
@@ -740,6 +768,7 @@ module.exports = (io, socket, driverId, companyId, queueService) => {
                 jobId: payload.jobId,
                 location: persistedLocation,
                 dispatch: dispatchSnapshot,
+                currentJobId: dispatchSnapshot?.currentJobId ?? payload.jobId ?? null,
             });
 
             const locationMeta = mapLocationForMeta(persistedLocation);
@@ -763,6 +792,10 @@ module.exports = (io, socket, driverId, companyId, queueService) => {
                     nextMeta.currentZone = null;
                 }
 
+                if (statusPayload.currentJobId !== undefined) {
+                    nextMeta.currentJobId = statusPayload.currentJobId;
+                }
+
                 return nextMeta;
             });
 
@@ -774,6 +807,7 @@ module.exports = (io, socket, driverId, companyId, queueService) => {
                 status,
                 dispatch: dispatchSnapshot ?? undefined,
                 timestamp: timestampNow(),
+                eventId,
             });
         } catch (error) {
             console.error('Failed to process driver status update:', error);
@@ -783,6 +817,7 @@ module.exports = (io, socket, driverId, companyId, queueService) => {
                 driverId,
                 error: error?.message || 'Status update failed',
                 timestamp: timestampNow(),
+                eventId: payload.eventId ?? null,
             });
         }
     });
@@ -1015,6 +1050,8 @@ module.exports = (io, socket, driverId, companyId, queueService) => {
                     },
                 });
 
+                await updateDriverCurrentJob(driverId, jobId);
+
                 // Update Assignment table from OFFERED to ASSIGNED
                 await prisma.assignments.updateMany({
                     where: {
@@ -1069,6 +1106,12 @@ module.exports = (io, socket, driverId, companyId, queueService) => {
                     },
                 });
 
+                if (shouldClearDriver || TERMINAL_DRIVER_JOB_STATUSES.has(normalizedProgressStatus)) {
+                    await updateDriverCurrentJob(driverId, null);
+                } else if (ACTIVE_DRIVER_JOB_STATUSES.has(normalizedProgressStatus)) {
+                    await updateDriverCurrentJob(driverId, jobId);
+                }
+
                 if (shouldClearDriver) {
                     await prisma.assignments.updateMany({
                         where: {
@@ -1106,6 +1149,7 @@ module.exports = (io, socket, driverId, companyId, queueService) => {
                     reason: 'job_progress',
                     jobId,
                     dispatch: dispatchSnapshot,
+                    currentJobId: dispatchSnapshot?.currentJobId ?? (shouldClearDriver ? null : jobId),
                 });
 
                 const zoneMeta = mapZoneForMeta(
@@ -1125,6 +1169,10 @@ module.exports = (io, socket, driverId, companyId, queueService) => {
                         nextMeta.currentZone = zoneMeta;
                     } else if (dispatchSnapshot && !dispatchSnapshot.zone) {
                         nextMeta.currentZone = null;
+                    }
+
+                    if (statusPayload.currentJobId !== undefined) {
+                        nextMeta.currentJobId = statusPayload.currentJobId;
                     }
 
                     return nextMeta;
@@ -1170,6 +1218,7 @@ module.exports = (io, socket, driverId, companyId, queueService) => {
     socket.on('job:progress:update', async (payload = {}) => {
         try {
             const { jobId, status: jobStatus } = payload;
+            const eventId = payload.eventId ?? null;
 
             if (!jobId || !jobStatus) {
                 console.warn('job:progress:update: missing jobId or status');
@@ -1206,7 +1255,12 @@ module.exports = (io, socket, driverId, companyId, queueService) => {
             });
 
             // When driver rejects/recalls job, set job status to UNASSIGNED so it becomes available to other drivers
-            const finalJobStatus = shouldReturnToUnassigned ? 'UNASSIGNED' : normalizedStatus;
+            // PAUSED is a client-only state; persist STARTED in the DB while tracking pause in requirements/timeline
+            const finalJobStatus = (() => {
+                if (shouldReturnToUnassigned) return 'UNASSIGNED';
+                if (normalizedStatus === 'PAUSED') return 'STARTED';
+                return normalizedStatus;
+            })();
 
             const existingJobRequirements = await prisma.job.findUnique({
                 where: { id: jobId },
@@ -1253,6 +1307,12 @@ module.exports = (io, socket, driverId, companyId, queueService) => {
                 ...prismaJobRecord,
                 customer: prismaJobRecord.users_jobs_customerIdTousers || null,
             };
+
+            if (shouldClearDriver || TERMINAL_DRIVER_JOB_STATUSES.has(normalizedStatus)) {
+                await updateDriverCurrentJob(driverId, null);
+            } else if (ACTIVE_DRIVER_JOB_STATUSES.has(normalizedStatus)) {
+                await updateDriverCurrentJob(driverId, jobId);
+            }
 
             if (normalizedStatus !== 'OFFERED') {
                 jobService.clearOfferExpiryTimer(jobId);
@@ -1346,6 +1406,7 @@ module.exports = (io, socket, driverId, companyId, queueService) => {
                     reason: 'job_progress',
                     jobId,
                     dispatch: dispatchSnapshot,
+                    currentJobId: dispatchSnapshot?.currentJobId ?? (shouldClearDriver ? null : jobId),
                 });
 
                 const zoneMeta = mapZoneForMeta(
@@ -1365,6 +1426,10 @@ module.exports = (io, socket, driverId, companyId, queueService) => {
                         nextMeta.currentZone = zoneMeta;
                     } else if (dispatchSnapshot && !dispatchSnapshot.zone) {
                         nextMeta.currentZone = null;
+                    }
+
+                    if (statusPayload.currentJobId !== undefined) {
+                        nextMeta.currentJobId = statusPayload.currentJobId;
                     }
 
                     return nextMeta;
@@ -1415,6 +1480,7 @@ module.exports = (io, socket, driverId, companyId, queueService) => {
                 jobId,
                 status: normalizedStatus,
                 timestamp: timestampNow(),
+                eventId,
             });
 
             console.log(`✅ Job progress: ${jobId} -> ${normalizedStatus} (driver: ${driverId})`);
@@ -1427,6 +1493,7 @@ module.exports = (io, socket, driverId, companyId, queueService) => {
                 jobId: payload.jobId,
                 error: error?.message || 'Job progress update failed',
                 timestamp: timestampNow(),
+                eventId: payload.eventId ?? null,
             });
         }
     });
@@ -1706,6 +1773,7 @@ module.exports = (io, socket, driverId, companyId, queueService) => {
                     reason: payload.reason || 'heartbeat_sync',
                     jobId: nextJobId,
                     dispatch: dispatchSnapshot,
+                    currentJobId: dispatchSnapshot?.currentJobId ?? nextJobId ?? activeJob?.id ?? null,
                 });
 
                 broadcastStatus(statusPayload);

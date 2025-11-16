@@ -411,7 +411,44 @@ driverNamespace.on('connection', (socket) => {
         if (user) {
           // ✅ FIX: No driver relation - get data from user and preferences
           const prefs = user.preferences && typeof user.preferences === 'object' ? user.preferences : {};
-          const lastLocation = prefs.lastLocation || prefs.currentLocation || {};
+          
+          // ✅ CRITICAL FIX: Get driver's REAL-TIME location from location_updates table (NOT stale preferences)
+          let lastLocation = {};
+          try {
+            const locationFromDb = await prisma.location_updates.findFirst({
+              where: { driverId: user.id },
+              orderBy: { timestamp: 'desc' },
+              select: {
+                latitude: true,
+                longitude: true,
+                heading: true,
+                speed: true,
+                altitude: true,
+                accuracy: true,
+                timestamp: true,
+              },
+            });
+            
+            if (locationFromDb) {
+              lastLocation = {
+                latitude: locationFromDb.latitude,
+                longitude: locationFromDb.longitude,
+                heading: locationFromDb.heading || 0,
+                speed: locationFromDb.speed || 0,
+                altitude: locationFromDb.altitude || 0,
+                accuracy: locationFromDb.accuracy || 0,
+                timestamp: locationFromDb.timestamp,
+              };
+              console.log(`📍 Driver ${user.id} location from DB: ${locationFromDb.latitude}, ${locationFromDb.longitude}`);
+            } else {
+              // Fallback to preferences if no location_updates exist (new drivers)
+              lastLocation = prefs.lastLocation || prefs.currentLocation || {};
+              console.warn(`⚠️ No location_updates found for driver ${user.id}, using preferences fallback`);
+            }
+          } catch (error) {
+            console.error(`❌ Error fetching location for driver ${user.id}:`, error);
+            lastLocation = prefs.lastLocation || prefs.currentLocation || {};
+          }
           
           // ✅ IMPROVED: Build name from available fields with better fallback
           let driverName = `${user.firstName || ''} ${user.lastName || ''}`.trim();
@@ -2044,9 +2081,11 @@ if (require.main === module) {
     console.log(`🚀 Server running on http://${HOST}:${PORT}`);
     
     // Initialize cron jobs after server starts
-    console.log('⏰ Initializing cron jobs...');
-    initializeCronJobs(io);
-    console.log('✓ Cron jobs initialized successfully');
+    // ⚠️ DISABLED: Cron jobs can cause state desync issues
+    // console.log('⏰ Initializing cron jobs...');
+    // initializeCronJobs(io);
+    // console.log('✓ Cron jobs initialized successfully');
+    console.log('⚠️  Cron jobs DISABLED for local development');
   });
 }
 

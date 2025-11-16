@@ -1595,6 +1595,61 @@ router.post('/payment', authenticateToken, async (req, res) => {
             dropoffLocation: dropoffLocationPayload || null,
         });
 
+        // ✅ FIX: Clear driver's currentJobId and update status to AVAILABLE after payment
+        try {
+            // Update user's currentJobId to NULL (job is completed)
+            await prisma.user.update({
+                where: { id: driverId },
+                data: {
+                    currentJobId: null,
+                },
+            });
+
+            // Update driver preferences to set status back to AVAILABLE
+            const driverPrefs = await prisma.driver_preferences.findUnique({
+                where: { driverId },
+            });
+
+            if (driverPrefs) {
+                const updatedPreferences = {
+                    ...(typeof driverPrefs.preferences === 'object' ? driverPrefs.preferences : {}),
+                    driverStatus: 'AVAILABLE',
+                };
+
+                await prisma.driver_preferences.update({
+                    where: { driverId },
+                    data: {
+                        preferences: updatedPreferences,
+                    },
+                });
+            }
+
+            // ✅ Emit socket event to dispatch to update driver status in real-time
+            if (req.io) {
+                const dispatchNamespace = req.io.of('/dispatch');
+                const driverStatusPayload = {
+                    driverId,
+                    companyId: job.companyId,
+                    status: 'AVAILABLE',
+                    currentJobId: null,
+                    timestamp: new Date().toISOString(),
+                };
+
+                dispatchNamespace.to(`dispatch_${job.companyId}`).emit('driver:status:updated', driverStatusPayload);
+                dispatchNamespace.to(`company_${job.companyId}`).emit('driver:status:updated', driverStatusPayload);
+                dispatchNamespace.to('super_admin').emit('driver:status:updated', driverStatusPayload);
+
+                logger.info('📡 [PAYMENT COLLECTION] Driver status updated to AVAILABLE', {
+                    driverId,
+                    jobId,
+                    currentJobId: null,
+                });
+            }
+        } catch (statusUpdateError) {
+            logger.error('⚠️ [PAYMENT COLLECTION] Failed to update driver status (non-critical):', statusUpdateError);
+            // Don't fail the payment if status update fails
+        }
+
         res.json({
             success: true,
             data: {
@@ -1625,6 +1680,7 @@ router.post('/payment', authenticateToken, async (req, res) => {
  */
 router.post('/walk-in/create', authenticateToken, async (req, res) => {
     const driverId = req.user?.id;
+    const body = req.body || {};
     
     if (!driverId) {
         return res.status(400).json({ error: 'Driver ID required' });
@@ -1712,6 +1768,41 @@ router.post('/walk-in/create', authenticateToken, async (req, res) => {
         
         logger.info(`📍 Using location: lat=${pickupLatitude}, lng=${pickupLongitude}, address=${pickupAddress}`);
 
+        const rawDropoffPayload =
+            body.dropoff ||
+            body.dropoffLocation ||
+            body.destination ||
+            null;
+        const sanitizedDropoff = sanitizeLocationPayload(rawDropoffPayload);
+        const dropoffSummary = sanitizedDropoff
+            ? {
+                  address:
+                      (sanitizedDropoff.address &&
+                          sanitizedDropoff.address.trim()) ||
+                      rawDropoffPayload?.address ||
+                      rawDropoffPayload?.label ||
+                      "Pinned drop-off",
+                  latitude: sanitizedDropoff.latitude,
+                  longitude: sanitizedDropoff.longitude,
+              }
+            : {
+                  address: 'Destination - To be set',
+                  latitude: null,
+                  longitude: null,
+              };
+        const dropoffMetadata = sanitizedDropoff
+            ? {
+                  placeId:
+                      rawDropoffPayload?.placeId ||
+                      rawDropoffPayload?.id ||
+                      null,
+                  source:
+                      rawDropoffPayload?.source ||
+                      rawDropoffPayload?.origin ||
+                      'manual',
+              }
+            : null;
+
         const now = new Date();
         const rideId = `WALKIN-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
         
@@ -1731,11 +1822,7 @@ router.post('/walk-in/create', authenticateToken, async (req, res) => {
                         latitude: pickupLatitude,
                         longitude: pickupLongitude,
                     },
-                    destination: {
-                        address: 'Destination - To be set',
-                        latitude: null,
-                        longitude: null,
-                    },
+                    destination: dropoffSummary,
                     requestedAt: now,
                     acceptedAt: now,
                     pickedUpAt: now,
@@ -1772,9 +1859,9 @@ router.post('/walk-in/create', authenticateToken, async (req, res) => {
                     pickupAddress,
                     pickupLatitude,
                     pickupLongitude,
-                    dropoffAddress: 'Destination - To be set',
-                    dropoffLatitude: null,
-                    dropoffLongitude: null,
+                    dropoffAddress: dropoffSummary.address,
+                    dropoffLatitude: dropoffSummary.latitude,
+                    dropoffLongitude: dropoffSummary.longitude,
                     estimatedPrice: 0,
                     paymentMethod: 'CASH',
                     requirements: {
@@ -1786,6 +1873,15 @@ router.post('/walk-in/create', authenticateToken, async (req, res) => {
                             ACCEPTED: now.toISOString(),
                             STARTED: now.toISOString(),
                         },
+                        dropoffSelection: sanitizedDropoff
+                            ? {
+                                  address: dropoffSummary.address,
+                                  latitude: dropoffSummary.latitude,
+                                  longitude: dropoffSummary.longitude,
+                                  placeId: dropoffMetadata?.placeId,
+                                  source: dropoffMetadata?.source,
+                              }
+                            : undefined,
                     },
                     createdAt: now,
                     updatedAt: now,
