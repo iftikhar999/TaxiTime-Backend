@@ -671,9 +671,15 @@ class JobService {
         }
       });
 
-      // Create assignment
-      const assignment = await prisma.assignments.create({
-        data: {
+      // Create or update assignment (prevent duplicates)
+      const assignment = await prisma.assignments.upsert({
+        where: {
+          jobId_driverId: {
+            jobId: offer.jobId,
+            driverId: driverId,
+          }
+        },
+        create: {
           id: randomUUID(),
           jobId: offer.jobId,
           driverId: driverId,
@@ -681,6 +687,15 @@ class JobService {
           assignedAt: new Date(),
           assignedBy: 'SYSTEM',
           updatedAt: new Date(),
+        },
+        update: {
+          status: 'ASSIGNED',
+          assignedAt: new Date(),
+          assignedBy: 'SYSTEM',
+          updatedAt: new Date(),
+          rejectionReason: null,
+          rejectedAt: null,
+          acceptedAt: null,
         }
       });
 
@@ -808,8 +823,15 @@ class JobService {
 
       const previousStatus = job.status;
 
-      const assignment = await prisma.assignments.create({
-        data: {
+      // Create or update assignment (prevent duplicates)
+      const assignment = await prisma.assignments.upsert({
+        where: {
+          jobId_driverId: {
+            jobId,
+            driverId,
+          }
+        },
+        create: {
           id: randomUUID(),
           jobId,
           driverId,
@@ -818,6 +840,15 @@ class JobService {
           assignedBy,
           updatedAt: new Date(),
         },
+        update: {
+          status: 'OFFERED',
+          assignedAt: new Date(),
+          assignedBy,
+          updatedAt: new Date(),
+          rejectionReason: null,
+          rejectedAt: null,
+          acceptedAt: null,
+        }
       });
 
       const expiresAt = new Date(Date.now() + JOB_OFFER_TIMEOUT_MS);
@@ -1575,7 +1606,7 @@ class JobService {
             ...(driverToRelease ? { driverId: driverToRelease } : {}),
           },
           data: {
-            status: 'CANCELLED',
+            status: 'RECALLED',
             rejectionReason: 'RECALLED',
             respondedAt: new Date(),
             updatedAt: new Date(),

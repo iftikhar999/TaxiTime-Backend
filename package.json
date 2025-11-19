@@ -14,7 +14,9 @@
     "db:studio": "prisma studio",
     "db:seed": "node prisma/seed.js",
     "db:reset": "node prisma/seed-reset.js",
-    "db:clean": "node prisma/seed-reset.js"
+    "db:clean": "node prisma/seed-reset.js",
+    "db:connections": "node check-db-connections.js",
+    "db:kill-idle": "node check-db-connections.js kill-idle"
   },
   "bin": {},
   "overrides": {},

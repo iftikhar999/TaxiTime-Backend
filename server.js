@@ -126,9 +126,107 @@ global.customerNamespace = customerNamespace;
 // Initialize earnings service with socket namespaces for real-time updates
 earningsService.setSocketNamespaces(dispatchNamespace, driverNamespace);
 
+// ===== DRIVER VIDEO STREAM MANAGEMENT =====
+const videoSessions = new Map(); // jobId => session metadata
+
+const getDispatchRoomName = (companyId) => (companyId ? `dispatch_${companyId}` : null);
+
+const emitToDispatchListeners = (companyId, eventName, payload) => {
+  const roomName = getDispatchRoomName(companyId);
+  if (roomName) {
+    dispatchNamespace.to(roomName).emit(eventName, payload);
+  }
+  dispatchNamespace.to('all_dispatchers').emit(eventName, payload);
+};
+
+const serializeVideoSession = (session) => ({
+  jobId: session.jobId,
+  driverId: session.driverId,
+  companyId: session.companyId,
+  startedAt: session.startedAt,
+  offer: session.offer,
+  viewerCount: session.viewers.size,
+});
+
+const updateVideoViewerCount = (session) => {
+  const payload = {
+    jobId: session.jobId,
+    driverId: session.driverId,
+    companyId: session.companyId,
+    viewerCount: session.viewers.size,
+  };
+  emitToDispatchListeners(session.companyId, 'job:video:viewer-count', payload);
+  driverNamespace.to(session.driverSocketId).emit('driver:video:viewer-count', payload);
+};
+
+const endVideoSession = (jobId, options = {}) => {
+  const session = videoSessions.get(jobId);
+  if (!session) {
+    return null;
+  }
+  videoSessions.delete(jobId);
+
+  const reason = options.reason || 'driver_stop';
+  emitToDispatchListeners(session.companyId, 'job:video:stopped', {
+    jobId: session.jobId,
+    driverId: session.driverId,
+    companyId: session.companyId,
+    reason,
+  });
+
+  session.viewers.forEach((viewerMeta, viewerSocketId) => {
+    dispatchNamespace.to(viewerSocketId).emit('job:video:stopped', {
+      jobId: session.jobId,
+      reason,
+    });
+  });
+
+  if (options.notifyDriver !== false) {
+    driverNamespace.to(session.driverSocketId).emit('driver:video:stop', {
+      jobId: session.jobId,
+      reason,
+    });
+  }
+
+  session.viewers.clear();
+  return session;
+};
+
+const removeViewerFromAllSessions = (socketId, reason = 'viewer_disconnected') => {
+  videoSessions.forEach((session) => {
+    if (session.viewers.delete(socketId)) {
+      dispatchNamespace.to(socketId).emit('job:video:stopped', {
+        jobId: session.jobId,
+        reason,
+      });
+      updateVideoViewerCount(session);
+    }
+  });
+};
+
+const sendVideoOfferToDispatchers = (session, targetSocket = null) => {
+  const payload = serializeVideoSession(session);
+  if (targetSocket) {
+    targetSocket.emit('job:video:offer', payload);
+    return;
+  }
+  emitToDispatchListeners(session.companyId, 'job:video:offer', payload);
+};
+
+const forwardDriverCandidateToViewers = (session, candidatePayload) => {
+  session.viewers.forEach((viewerMeta, viewerSocketId) => {
+    dispatchNamespace.to(viewerSocketId).emit('job:video:driver-candidate', {
+      jobId: session.jobId,
+      driverId: session.driverId,
+      companyId: session.companyId,
+      candidate: candidatePayload,
+    });
+  });
+};
+
 // Dispatch namespace - for company dispatchers and admins
 dispatchNamespace.on('connection', (socket) => {
-  console.log('Dispatcher connected:', socket.id);
+  console.log('✅ Dispatcher connected:', socket.id);
 
   socket.on('authenticate', (data) => {
     // Store user info in socket for later use
@@ -137,17 +235,27 @@ dispatchNamespace.on('connection', (socket) => {
 
     if (data.companyId) {
       socket.join(`dispatch_${data.companyId}`);
-      console.log(`Dispatcher ${socket.id} joined dispatch_${data.companyId}`);
+      console.log(`✅ Dispatcher ${socket.id} joined dispatch_${data.companyId}`);
+      console.log(`   Total rooms for this socket:`, Array.from(socket.rooms));
+      videoSessions.forEach((session) => {
+        if (session.companyId === data.companyId) {
+          sendVideoOfferToDispatchers(session, socket);
+        }
+      });
     } else {
       // Dispatchers without companyId join the all_dispatchers room
       socket.join('all_dispatchers');
-      console.log(`Dispatcher ${socket.id} joined all_dispatchers room`);
+      console.log(`✅ Dispatcher ${socket.id} joined all_dispatchers room`);
+      videoSessions.forEach((session) => {
+        sendVideoOfferToDispatchers(session, socket);
+      });
     }
   });
 
   socket.on('joinCompany', (companyId) => {
     socket.join(`company_${companyId}`);
-    console.log(`Dispatcher joined company room: company_${companyId}`);
+    console.log(`✅ Dispatcher joined company room: company_${companyId}`);
+    console.log(`   Total rooms for this socket:`, Array.from(socket.rooms));
   });
 
   // Super Admin - join super admin room (sees all companies)
@@ -293,8 +401,90 @@ dispatchNamespace.on('connection', (socket) => {
     }
   });
 
+  const canViewVideoSession = (session) => {
+    if (!session) {
+      return false;
+    }
+    if (!session.companyId) {
+      return true;
+    }
+    if (socket.companyId && socket.companyId === session.companyId) {
+      return true;
+    }
+    return socket.role === 'SUPER_ADMIN';
+  };
+
+  socket.on('dispatch:video:answer', (payload = {}) => {
+    try {
+      const { jobId, answer } = payload;
+      if (!jobId || !answer) {
+        return;
+      }
+      const session = videoSessions.get(jobId);
+      if (!session || !canViewVideoSession(session)) {
+        socket.emit('job:video:error', {
+          jobId,
+          message: 'Video stream not available for this job',
+        });
+        return;
+      }
+
+      session.viewers.set(socket.id, {
+        socketId: socket.id,
+        userId: socket.userId,
+        joinedAt: Date.now(),
+      });
+
+      driverNamespace.to(session.driverSocketId).emit('driver:video:answer', {
+        jobId: session.jobId,
+        driverId: session.driverId,
+        answer,
+        dispatcherId: socket.userId,
+      });
+
+      updateVideoViewerCount(session);
+    } catch (error) {
+      console.error('dispatch:video:answer error', error);
+    }
+  });
+
+  socket.on('dispatch:video:ice', (payload = {}) => {
+    try {
+      const { jobId, candidate } = payload;
+      if (!jobId || !candidate) {
+        return;
+      }
+      const session = videoSessions.get(jobId);
+      if (!session || !canViewVideoSession(session)) {
+        return;
+      }
+      driverNamespace.to(session.driverSocketId).emit('driver:video:viewer-candidate', {
+        jobId: session.jobId,
+        driverId: session.driverId,
+        candidate,
+      });
+    } catch (error) {
+      console.error('dispatch:video:ice error', error);
+    }
+  });
+
+  socket.on('dispatch:video:leave', (payload = {}) => {
+    const { jobId } = payload;
+    if (!jobId) {
+      return;
+    }
+    const session = videoSessions.get(jobId);
+    if (!session) {
+      return;
+    }
+    if (session.viewers.delete(socket.id)) {
+      updateVideoViewerCount(session);
+    }
+  });
+
   socket.on('disconnect', () => {
     console.log('Dispatcher disconnected:', socket.id);
+    removeViewerFromAllSessions(socket.id);
   });
 });
 
@@ -641,18 +831,33 @@ driverNamespace.on('connection', (socket) => {
           // ✅ Broadcast driver online to dispatch portal
           const rooms = [`dispatch_${data.companyId}`, `company_${data.companyId}`, 'super_admin'];
           
+          console.log(`📡 Broadcasting driver online to rooms:`, rooms);
+          console.log(`📡 Dispatch namespace sockets count:`, dispatchNamespace.sockets.size);
+          console.log(`📡 Driver payload:`, {
+            id: driverPayload.id,
+            name: driverPayload.name,
+            status: driverPayload.status,
+            hasVehicle: !!driverPayload.vehicle,
+            hasPosition: !!driverPayload.position,
+            currentJobId: driverPayload.currentJobId,
+          });
+          
           rooms.forEach((room) => {
+            const roomSockets = dispatchNamespace.adapter.rooms.get(room);
+            console.log(`📡 Room "${room}" has ${roomSockets?.size || 0} connected sockets`);
+            
             dispatchNamespace.to(room).emit('driver:online', driverPayload);
             dispatchNamespace.to(room).emit('driver:status:update', {
               driverId: user.id,
               companyId: data.companyId,
-              status: user.status || 'AVAILABLE',
+              status: driverStatus,
               timestamp: new Date().toISOString(),
               ...driverPayload,
             });
           });
           
-          console.log(`📡 Driver online status broadcasted to dispatch: ${user.id}`);
+          console.log(`✅ Driver online status broadcasted to dispatch: ${user.id}`);
+          console.log(`   Driver status: ${driverStatus}`);
           console.log(`   Has active shift: ${!!currentShift}`);
           console.log(`   Has selected vehicle: ${!!selectedVehicle}`);
           console.log(`   Has selected tariff: ${!!selectedTariff}`);
@@ -893,12 +1098,37 @@ driverNamespace.on('connection', (socket) => {
     console.log('💰 Payment collected:', data);
 
     try {
-      // Update job with payment info
+      const driverId = socket.userId;
+
+      // 1. Find and update the payment record status to PAID
+      const payment = await prisma.payments.findFirst({
+        where: { 
+          jobId: data.jobId,
+          driverId: driverId
+        },
+        orderBy: { createdAt: 'desc' }
+      });
+
+      if (payment) {
+        await prisma.payments.update({
+          where: { id: payment.id },
+          data: {
+            status: 'PAID',
+            paidAt: new Date(),
+            paymentMethod: data.paymentMethod,
+            amount: data.amount
+          }
+        });
+        console.log(`✅ Payment ${payment.id} marked as PAID`);
+      } else {
+        console.warn(`⚠️ No payment record found for job ${data.jobId} and driver ${driverId}`);
+      }
+
+      // 2. Update job with payment info (keep existing behavior)
       const updatedJob = await prisma.job.update({
         where: { id: data.jobId },
         data: {
           paymentMethod: data.paymentMethod,
-          paymentStatus: 'COMPLETED',
           finalAmount: data.amount,
           completedAt: new Date(),
           meterData: data.meterData ? JSON.stringify(data.meterData) : null
@@ -908,26 +1138,62 @@ driverNamespace.on('connection', (socket) => {
             select: {
               id: true,
               firstName: true,
-              lastName: true
+              lastName: true,
+              preferences: true
             }
           }
         }
       });
 
-      const eventData = {
-        ...data,
-        driverId: socket.userId,
-        companyId: socket.companyId,
-        driverName: `${updatedJob.driver.firstName} ${updatedJob.driver.lastName}`,
-        timestamp: new Date()
+      // 3. Set driver to AVAILABLE now that payment is collected
+      const currentPrefs = typeof updatedJob.driver?.preferences === 'object' 
+        ? updatedJob.driver.preferences 
+        : {};
+      
+      const dispatchPrefs = currentPrefs.dispatch && typeof currentPrefs.dispatch === 'object' 
+        ? { ...currentPrefs.dispatch } 
+        : {};
+      dispatchPrefs.status = 'AVAILABLE';
+      
+      const updatedPrefs = {
+        ...currentPrefs,
+        driverStatus: 'AVAILABLE',
+        lastStatusChange: new Date().toISOString(),
+        dispatch: dispatchPrefs,
       };
 
-      // Broadcast to all panels
+      await prisma.user.update({
+        where: { id: driverId },
+        data: { preferences: updatedPrefs },
+      });
+
+      console.log(`✅ Driver ${driverId} set to AVAILABLE after payment collected`);
+
+      // 4. Broadcast driver status update to dispatch
+      const driverStatusPayload = {
+        driverId: driverId,
+        status: 'AVAILABLE',
+        timestamp: new Date().toISOString(),
+        companyId: socket.companyId,
+        currentJobId: null
+      };
+
+      dispatchNamespace.to(`dispatch_${socket.companyId}`).emit('driver:status:updated', driverStatusPayload);
+      dispatchNamespace.to(`company_${socket.companyId}`).emit('driver:status:updated', driverStatusPayload);
+      dispatchNamespace.to('super_admin').emit('driver:status:updated', driverStatusPayload);
+
+      // 5. Broadcast payment collected event (keep existing behavior)
+      const eventData = {
+        ...data,
+        driverId: driverId,
+        companyId: socket.companyId,
+        driverName: `${updatedJob.driver.firstName} ${updatedJob.driver.lastName}`,
+        timestamp: new Date(),
+        paymentStatus: 'PAID'
+      };
+
       dispatchNamespace.to(`dispatch_${socket.companyId}`).emit('payment:collected', eventData);
-
       dispatchNamespace.to(`company_${socket.companyId}`).emit('payment:collected', eventData);
-
-      // Forward to Super Admin - they see ALL platform events
       dispatchNamespace.to('super_admin').emit('payment:collected', eventData);
 
       // Notify customer payment verified
@@ -989,7 +1255,7 @@ driverNamespace.on('connection', (socket) => {
       });
 
       // Update offer status
-      await prisma.offer.updateMany({
+      await prisma.offers.updateMany({
         where: {
           jobId,
           driverId: effectiveDriverId,
@@ -1073,14 +1339,14 @@ driverNamespace.on('connection', (socket) => {
         },
         data: {
           status: 'REJECTED',
-          respondedAt: rejectedAt ? new Date(rejectedAt) : new Date(),
+          rejectedAt: rejectedAt ? new Date(rejectedAt) : new Date(),
           rejectionReason: reason || 'Driver rejected',
           updatedAt: new Date(),
         },
       });
 
       // Update offer status
-      await prisma.offer.updateMany({
+      await prisma.offers.updateMany({
         where: {
           jobId,
           driverId: effectiveDriverId,
@@ -1250,18 +1516,38 @@ driverNamespace.on('connection', (socket) => {
           console.log(`✅ Updated Ride ${updatedJob.tripId} with COMPLETED status`);
         }
 
-        // ✅ Update driver status to AVAILABLE
+        // ⚠️ CRITICAL: Driver stays BUSY until payment is collected
+        // The payment:collected event will set driver to AVAILABLE
+        // This prevents driver from appearing available while payment screen is showing
+        const driverToUpdate = await prisma.user.findUnique({
+          where: { id: effectiveDriverId },
+          select: { preferences: true },
+        });
+
+        const currentPrefs = typeof driverToUpdate?.preferences === 'object' ? driverToUpdate.preferences : {};
+        
+        // Clear currentJobId but keep driver BUSY
+        const dispatchPrefs = currentPrefs.dispatch && typeof currentPrefs.dispatch === 'object' 
+          ? { ...currentPrefs.dispatch } 
+          : {};
+        dispatchPrefs.currentJobId = null; // Clear the completed job ID
+        // dispatchPrefs.status remains unchanged (stays BUSY)
+        
+        const updatedPrefs = {
+          ...currentPrefs,
+          // driverStatus remains unchanged (stays BUSY until payment collected)
+          dispatch: dispatchPrefs,
+        };
+
         await prisma.user.update({
           where: { id: effectiveDriverId },
           data: {
-            preferences: {
-              driverStatus: 'AVAILABLE',
-              lastStatusChange: new Date().toISOString(),
-            },
+            preferences: updatedPrefs,
           },
         });
 
-        console.log(`✅ Job ${jobId} COMPLETED - driver ${effectiveDriverId} set to AVAILABLE`);
+        console.log(`✅ Job ${jobId} COMPLETED - driver ${effectiveDriverId} stays BUSY until payment collected (currentJobId cleared)`);
+
 
         // Notify dispatcher
         const dispatchPayload = {
@@ -1347,18 +1633,34 @@ driverNamespace.on('connection', (socket) => {
           },
         });
 
-        // ✅ FIX: Update driver status back to AVAILABLE
-        await prisma.user.update({
+        // ✅ FIXED: Fetch driver preferences, merge, clear currentJobId
+        const driverForNoShow = await prisma.user.findUnique({
           where: { id: effectiveDriverId },
-          data: {
-            preferences: {
-              driverStatus: 'AVAILABLE',
-              lastStatusChange: new Date().toISOString(),
-            },
-          },
+          select: { preferences: true },
         });
 
-        console.log(`✅ Job ${jobId} ${status} - returned to UNASSIGNED by driver ${effectiveDriverId}`);
+        const currentPrefsForNoShow = typeof driverForNoShow?.preferences === 'object' ? driverForNoShow.preferences : {};
+        
+        // ✅ FIXED: Also clear currentJobId from dispatch preferences
+        const dispatchPrefsForNoShow = currentPrefsForNoShow.dispatch && typeof currentPrefsForNoShow.dispatch === 'object' 
+          ? { ...currentPrefsForNoShow.dispatch } 
+          : {};
+        dispatchPrefsForNoShow.currentJobId = null; // Clear the job ID
+        dispatchPrefsForNoShow.status = 'AVAILABLE'; // Update dispatch status
+        
+        const updatedPrefsForNoShow = {
+          ...currentPrefsForNoShow,
+          driverStatus: 'AVAILABLE',
+          lastStatusChange: new Date().toISOString(),
+          dispatch: dispatchPrefsForNoShow,
+        };
+
+        await prisma.user.update({
+          where: { id: effectiveDriverId },
+          data: { preferences: updatedPrefsForNoShow },
+        });
+
+        console.log(`✅ Job ${jobId} ${status} - returned to UNASSIGNED by driver ${effectiveDriverId} (preferences merged, currentJobId cleared)`);
 
         const dispatchPayload = {
           jobId,
@@ -1604,6 +1906,63 @@ driverNamespace.on('connection', (socket) => {
     }
   });
 
+  socket.on('driver:video:offer', (payload = {}) => {
+    try {
+      const { jobId, offer, startedAt } = payload;
+      if (!jobId || !offer || !socket.userId) {
+        return;
+      }
+
+      if (videoSessions.has(jobId)) {
+        endVideoSession(jobId, { notifyDriver: false, reason: 'driver_restart' });
+      }
+
+      const session = {
+        jobId,
+        driverId: socket.userId,
+        companyId: socket.companyId,
+        driverSocketId: socket.id,
+        offer,
+        startedAt: startedAt || new Date().toISOString(),
+        viewers: new Map(),
+      };
+
+      videoSessions.set(jobId, session);
+      sendVideoOfferToDispatchers(session);
+      updateVideoViewerCount(session);
+    } catch (error) {
+      console.error('driver:video:offer error', error);
+    }
+  });
+
+  socket.on('driver:video:ice', (payload = {}) => {
+    try {
+      const { jobId, candidate } = payload;
+      if (!jobId || !candidate) {
+        return;
+      }
+      const session = videoSessions.get(jobId);
+      if (!session || session.driverSocketId !== socket.id) {
+        return;
+      }
+      forwardDriverCandidateToViewers(session, candidate);
+    } catch (error) {
+      console.error('driver:video:ice error', error);
+    }
+  });
+
+  socket.on('driver:video:stop', (payload = {}) => {
+    const { jobId } = payload;
+    if (!jobId) {
+      return;
+    }
+    const session = videoSessions.get(jobId);
+    if (!session || session.driverSocketId !== socket.id) {
+      return;
+    }
+    endVideoSession(jobId, { notifyDriver: false, reason: payload.reason || 'driver_stop' });
+  });
+
   socket.on('disconnect', async (reason) => {
     console.log(`🔴 Driver disconnected:`, {
       socketId: socket.id,
@@ -1611,6 +1970,15 @@ driverNamespace.on('connection', (socket) => {
       companyId: socket.companyId,
       reason: reason,
       timestamp: new Date().toISOString()
+    });
+
+    videoSessions.forEach((session) => {
+      if (session.driverSocketId === socket.id) {
+        endVideoSession(session.jobId, {
+          notifyDriver: false,
+          reason: 'driver_disconnected',
+        });
+      }
     });
 
     // Critical: Handle driver disconnect cleanup to prevent stale state
@@ -2089,9 +2457,59 @@ if (require.main === module) {
   });
 }
 
-// Graceful shutdown
+// Graceful shutdown - handle all termination signals
+const gracefulShutdown = async (signal) => {
+  console.log(`\n${signal} received. Shutting down gracefully...`);
+  
+  try {
+    // Stop accepting new connections
+    server.close(() => {
+      console.log('✅ HTTP server closed');
+    });
+    
+    // Stop cron jobs
+    stopAllCronJobs();
+    console.log('✅ Cron jobs stopped');
+    
+    // Disconnect all Socket.IO clients
+    io.close(() => {
+      console.log('✅ Socket.IO closed');
+    });
+    
+    // Close Prisma connections
+    await prisma.$disconnect();
+    console.log('✅ Database connections closed');
+    
+    console.log('👋 Graceful shutdown complete');
+    process.exit(0);
+  } catch (error) {
+    console.error('❌ Error during shutdown:', error);
+    process.exit(1);
+  }
+};
+
 process.on('beforeExit', async () => {
-  console.log('Shutting down gracefully...');
-  stopAllCronJobs();
-  await prisma.$disconnect();
+  console.log('Process beforeExit event');
+  await gracefulShutdown('beforeExit');
+});
+
+process.on('SIGTERM', async () => {
+  await gracefulShutdown('SIGTERM');
+});
+
+process.on('SIGINT', async () => {
+  await gracefulShutdown('SIGINT');
+});
+
+process.on('uncaughtException', async (error) => {
+  console.error('❌ Uncaught Exception:', error);
+  await gracefulShutdown('uncaughtException');
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+  // Don't exit on unhandled rejection in production, just log it
+  if (process.env.NODE_ENV !== 'production') {
+    gracefulShutdown('unhandledRejection');
+  }
 });

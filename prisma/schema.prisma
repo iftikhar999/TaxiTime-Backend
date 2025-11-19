@@ -44,6 +44,8 @@ model assignments {
   rejectionReason String?
   users           User             @relation(fields: [driverId], references: [id])
   jobs            Job              @relation(fields: [jobId], references: [id])
+
+  @@unique([jobId, driverId], name: "jobId_driverId")
 }
 
 model billing_records {
@@ -221,6 +223,7 @@ model companies {
   users_users_companyIdTocompanies User[]                      @relation("users_companyIdTocompanies")
   vehicles                         vehicles[]
   zones                            zones[]
+  jobMeterSnapshots                job_meter_snapshots[]
 }
 
 model company_configurations {
@@ -562,7 +565,7 @@ model driver_earnings {
   users             User      @relation(fields: [driverId], references: [id], onDelete: Cascade)
   jobs              Job?      @relation(fields: [jobId], references: [id])
   payments          payments? @relation(fields: [paymentId], references: [id])
-  shifts            Shift?   @relation(fields: [shiftId], references: [id])
+  shifts            Shift?    @relation(fields: [shiftId], references: [id])
 
   @@index([companyId, earnedAt(sort: Desc)])
   @@index([driverId, earnedAt(sort: Desc)])
@@ -680,16 +683,16 @@ model invoices {
 }
 
 model Job {
-  id                                 String            @id
-  jobId                              String            @unique
-  createdAt                          DateTime          @default(now())
+  id                                 String                @id
+  jobId                              String                @unique
+  createdAt                          DateTime              @default(now())
   updatedAt                          DateTime
   companyId                          String
-  type                               JobType           @default(TAXI)
-  status                             JobStatus         @default(PENDING)
+  type                               JobType               @default(TAXI)
+  status                             JobStatus             @default(PENDING)
   tripId                             String?
   deliveryOrderId                    String?
-  priority                           Int               @default(0)
+  priority                           Int                   @default(0)
   scheduledAt                        DateTime?
   estimatedDuration                  Int?
   customerId                         String?
@@ -708,25 +711,25 @@ model Job {
   assignedDriverId                   String?
   requirements                       Json?
   instructions                       String?
-  actualFare                         Decimal?          @db.Decimal(10, 2)
-  finalAmount                        Decimal?          @db.Decimal(10, 2)
+  actualFare                         Decimal?              @db.Decimal(10, 2)
+  finalAmount                        Decimal?              @db.Decimal(10, 2)
   actualDistanceKm                   Float?
   actualDurationSeconds              Int?
   startedAt                          DateTime?
   alarms                             alarms[]
   assignments                        assignments[]
   driver_earnings                    driver_earnings[]
-  users_jobs_assignedDriverIdTousers User?             @relation("jobs_assignedDriverIdTousers", fields: [assignedDriverId], references: [id])
-  companies                          companies         @relation(fields: [companyId], references: [id])
-  users_jobs_customerIdTousers       User?             @relation("jobs_customerIdTousers", fields: [customerId], references: [id])
-  delivery_orders                    delivery_orders?  @relation(fields: [deliveryOrderId], references: [id])
-  rides                              rides?            @relation(fields: [tripId], references: [id])
+  users_jobs_assignedDriverIdTousers User?                 @relation("jobs_assignedDriverIdTousers", fields: [assignedDriverId], references: [id])
+  companies                          companies             @relation(fields: [companyId], references: [id])
+  users_jobs_customerIdTousers       User?                 @relation("jobs_customerIdTousers", fields: [customerId], references: [id])
+  delivery_orders                    delivery_orders?      @relation(fields: [deliveryOrderId], references: [id])
+  rides                              rides?                @relation(fields: [tripId], references: [id])
   location_updates                   LocationUpdate[]
   job_meter_snapshots                job_meter_snapshots[]
   messages                           messages[]
   offers                             offers[]
   payments                           payments[]
-  userCurrentJobs                    User[]             @relation("user_current_job")
+  userCurrentJobs                    User[]                @relation("user_current_job")
 
   @@index([assignedDriverId, updatedAt])
   @@map("jobs")
@@ -755,27 +758,27 @@ model LocationUpdate {
 }
 
 model job_meter_snapshots {
-  id             String   @id @default(cuid())
-  createdAt      DateTime @default(now())
+  id             String     @id @default(cuid())
+  createdAt      DateTime   @default(now())
   recordedAt     DateTime
   jobId          String
   driverId       String
   companyId      String?
   status         String?
-  reason         String?  @default("interval")
-  elapsedSeconds Int      @default(0)
-  waitingSeconds Int      @default(0)
-  distanceMeters Float    @default(0)
+  reason         String?    @default("interval")
+  elapsedSeconds Int        @default(0)
+  waitingSeconds Int        @default(0)
+  distanceMeters Float      @default(0)
   currentFare    Float?
   speedKmh       Float?
-  isPaused       Boolean  @default(false)
+  isPaused       Boolean    @default(false)
   latitude       Float?
   longitude      Float?
   accuracy       Float?
   heading        Float?
   routeSegment   Json?
-  users          User     @relation(fields: [driverId], references: [id])
-  jobs           Job      @relation(fields: [jobId], references: [id])
+  users          User       @relation(fields: [driverId], references: [id])
+  jobs           Job        @relation(fields: [jobId], references: [id])
   companies      companies? @relation(fields: [companyId], references: [id])
 
   @@index([jobId, recordedAt], map: "job_meter_snapshots_jobId_recordedAt_idx")
@@ -1104,7 +1107,7 @@ model Shift {
   driver_earnings driver_earnings[]
   companies       companies         @relation(fields: [companyId], references: [id])
   users           User              @relation(fields: [driverId], references: [id])
-  
+
   @@map("shifts")
 }
 
@@ -1231,6 +1234,7 @@ model User {
   support_tickets_support_tickets_reporterIdTousers       support_tickets[]           @relation("support_tickets_reporterIdTousers")
   companies_users_companyIdTocompanies                    companies?                  @relation("users_companyIdTocompanies", fields: [companyId], references: [id])
   wallet_transactions                                     wallet_transactions[]
+  jobMeterSnapshots                                       job_meter_snapshots[]
 
   @@index([currentJobId], map: "users_currentJobId_idx")
   @@map("users")
@@ -1372,6 +1376,7 @@ enum AssignmentStatus {
   COMPLETED
   CANCELLED
   OFFERED
+  RECALLED
 }
 
 enum BillingCycle {

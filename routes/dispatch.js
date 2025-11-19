@@ -454,6 +454,139 @@ const dispatchJobInclude = {
   },
 };
 
+const normalizeRequirementTimeline = (timeline) => {
+  if (!timeline) return [];
+
+  const toArray = (items) =>
+    items
+      .map((item) => {
+        const status = item?.status ?? item?.STATUS ?? item?.Status;
+        const timestamp = item?.timestamp ?? item?.at ?? item?.time ?? item?.TIMESTAMP;
+        if (!status || !timestamp) {
+          return null;
+        }
+        const parsed = new Date(timestamp);
+        if (Number.isNaN(parsed.getTime())) {
+          return null;
+        }
+        return {
+          status: String(status).toUpperCase(),
+          timestamp: parsed.toISOString(),
+        };
+      })
+      .filter(Boolean)
+      .sort(
+        (a, b) =>
+          new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+      );
+
+  if (Array.isArray(timeline)) {
+    return toArray(timeline);
+  }
+
+  if (typeof timeline === 'object') {
+    return toArray(
+      Object.entries(timeline).map(([status, timestamp]) => ({
+        status,
+        timestamp,
+      }))
+    );
+  }
+
+  if (typeof timeline === 'string') {
+    try {
+      const parsed = JSON.parse(timeline);
+      if (Array.isArray(parsed)) {
+        return toArray(parsed);
+      }
+      if (parsed && typeof parsed === 'object') {
+        return toArray(
+          Object.entries(parsed).map(([status, timestamp]) => ({
+            status,
+            timestamp,
+          }))
+        );
+      }
+    } catch (error) {
+      console.warn('Failed to parse requirements.statusTimeline:', error);
+    }
+  }
+
+  return [];
+};
+
+// Helper function to build status timeline with timestamps and durations
+const buildStatusTimeline = (job, requirements) => {
+  const timeline = [];
+  const normalizedTimeline = normalizeRequirementTimeline(
+    requirements.statusTimeline
+  );
+
+  // If we have statusTimeline in requirements, use it
+  if (normalizedTimeline.length > 0) {
+    for (let i = 0; i < normalizedTimeline.length; i++) {
+      const current = normalizedTimeline[i];
+      const next = normalizedTimeline[i + 1];
+
+      const timestamp = new Date(current.timestamp);
+      const nextTimestamp = next ? new Date(next.timestamp) : null;
+
+      let duration = null;
+      if (nextTimestamp && !Number.isNaN(nextTimestamp.getTime())) {
+        const durationMs = nextTimestamp - timestamp;
+        const durationSeconds = Math.floor(durationMs / 1000);
+        const minutes = Math.floor(durationSeconds / 60);
+        const seconds = durationSeconds % 60;
+        duration = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+      }
+
+      timeline.push({
+        status: current.status,
+        timestamp: timestamp.toISOString(),
+        duration: duration,
+        isLast: i === normalizedTimeline.length - 1,
+      });
+    }
+  } else {
+    // Build basic timeline from job timestamps
+    const baseTimeline = [
+      { status: 'CREATED', timestamp: job.createdAt, field: 'createdAt' },
+      { status: 'ASSIGNED', timestamp: job.assignedAt, field: 'assignedAt' },
+      { status: 'ACCEPTED', timestamp: job.acceptedAt, field: 'acceptedAt' },
+      { status: 'STARTED', timestamp: job.startedAt, field: 'startedAt' },
+      { status: 'COMPLETED', timestamp: job.completedAt, field: 'completedAt' },
+    ];
+    
+    const validEntries = baseTimeline.filter(entry => entry.timestamp);
+    
+    for (let i = 0; i < validEntries.length; i++) {
+      const current = validEntries[i];
+      const next = validEntries[i + 1];
+      
+      const timestamp = new Date(current.timestamp);
+      const nextTimestamp = next ? new Date(next.timestamp) : null;
+      
+      let duration = null;
+      if (nextTimestamp) {
+        const durationMs = nextTimestamp - timestamp;
+        const durationSeconds = Math.floor(durationMs / 1000);
+        const minutes = Math.floor(durationSeconds / 60);
+        const seconds = durationSeconds % 60;
+        duration = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+      }
+      
+      timeline.push({
+        status: current.status,
+        timestamp: timestamp.toISOString(),
+        duration: duration,
+        isLast: i === validEntries.length - 1
+      });
+    }
+  }
+  
+  return timeline;
+};
+
 const formatJobForDispatch = (job) => {
   const rawLocationUpdates = job.locationUpdates || job.location_updates || [];
   const rawTrip = job.trip || job.rides || null;
@@ -489,6 +622,10 @@ const formatJobForDispatch = (job) => {
       }
     : null;
   const requirements = parseJsonField(job.requirements, {}) || {};
+
+  // Extract walk-in job metadata
+  const isWalkIn = requirements.isWalkIn === true;
+  const createdBy = requirements.createdBy || null;
 
   const tripPickup = parseRideLocation(trip?.pickup);
   const tripDropoff = parseRideLocation(trip?.destination);
@@ -527,6 +664,20 @@ const formatJobForDispatch = (job) => {
     driverTrail
   );
 
+  // Build status timeline with durations
+  const statusTimeline = buildStatusTimeline(job, requirements);
+
+  // Extract ride metrics from requirements
+  const rideMetrics = {
+    estimatedDistance: job.estimatedDistance ?? requirements.estimatedDistance ?? null,
+    estimatedDuration: job.estimatedDuration ?? requirements.estimatedDuration ?? null,
+    actualDistance: job.actualDistanceKm ?? requirements.actualDistance ?? null,
+    actualDuration: job.actualDurationSeconds ?? requirements.actualDuration ?? null,
+    estimatedPrice: job.estimatedPrice ?? requirements.estimatedPrice ?? null,
+    actualFare: job.actualFare ?? requirements.actualFare ?? null,
+    finalAmount: job.finalAmount ?? requirements.finalAmount ?? null,
+  };
+
   const formattedJob = {
     ...job,
     pickupAddress,
@@ -544,6 +695,10 @@ const formatJobForDispatch = (job) => {
     paymentIntentId: requirements.stripePaymentIntentId ?? null,
     currency: requirements.currency ?? trip?.currency ?? null,
     fareBreakdown: requirements.fareBreakdown ?? null,
+    // 🚨 Real-time ride metrics
+    rideMetrics: rideMetrics,
+    // 🚨 Status timeline with durations
+    statusTimeline: statusTimeline,
     // 🚨 CRITICAL FIX: Add requirements fields to top level for edit form
     passengers: requirements.passengers ?? 1,
     bags: requirements.bags ?? 0,
@@ -555,6 +710,10 @@ const formatJobForDispatch = (job) => {
     riderName: requirements.passengerName ?? null,
     riderPhone: requirements.passengerPhone ?? null,
     riderEmail: requirements.passengerEmail ?? customer?.email ?? null,
+    // Walk-in job metadata
+    isWalkIn: isWalkIn,
+    createdBy: createdBy,
+    createdByDriver: isWalkIn && createdBy && createdBy === job.assignedDriverId ? assignedDriver : null,
   };
 
   if (customer) {
@@ -785,9 +944,9 @@ const recallJobToQueue = async ({
       ...(jobRecord.assignedDriverId ? { driverId: jobRecord.assignedDriverId } : {}),
     },
     data: {
-      status: 'CANCELLED',
+      status: 'RECALLED',
       rejectionReason: 'RECALLED',
-      respondedAt: timestamp,
+      rejectedAt: timestamp,
       updatedAt: timestamp,
     },
   });
@@ -917,7 +1076,7 @@ const getDispatchDriversHandler = async (req, res) => {
   try {
     const { latitude, longitude, radius = 5, companyId: companyIdQuery } = req.query;
     const companyId = req.user.companyId ?? companyIdQuery;
-
+    console.log('✅ Dispatch get drivers - companyId:', companyId);
     const companyFilter = companyId ? { companyId: String(companyId) } : {};
 
     const [drivers, zones] = await Promise.all([
@@ -926,6 +1085,22 @@ const getDispatchDriversHandler = async (req, res) => {
           role: 'DRIVER',
           ...companyFilter,
           isActive: true,
+          OR: [
+            {
+              // Only include drivers with preferences that have driverStatus not set to OFFLINE
+              preferences: {
+                path: ['driverStatus'],
+                not: 'OFFLINE',
+              },
+            },
+            {
+              // Include drivers where preferences don't have driverStatus field at all
+              preferences: {
+                path: ['driverStatus'],
+                equals: null,
+              },
+            },
+          ],
         },
         select: {
           id: true,
@@ -933,7 +1108,6 @@ const getDispatchDriversHandler = async (req, res) => {
           lastName: true,
           phone: true,
           email: true,
-          currentJobId: true,
           preferences: true,
           rating: true,
           updatedAt: true,
@@ -1022,6 +1196,7 @@ const getDispatchDriversHandler = async (req, res) => {
     };
 
     let responseDrivers = drivers.map((driver) => {
+      console.log(`BROTHERRRRR ${JSON.stringify(driver)}`);
       const preferences = cloneJson(driver.preferences);
       const dispatchMeta =
         preferences.dispatch && typeof preferences.dispatch === 'object'
@@ -1035,16 +1210,20 @@ const getDispatchDriversHandler = async (req, res) => {
         (driver.location_updates && driver.location_updates[0]) ||
         null;
 
-      let statusHint = dispatchMeta.status || null;
+      // ✅ FIXED: Check preferences.driverStatus first, then dispatch.status, then shift.status
+
+      console.log(`🚗 Driver ${driver.id} preferences driverStatus:`, preferences.driverStatus);
+      let statusHint = preferences.driverStatus || dispatchMeta.status || null;
       if (!statusHint && latestShift?.status) {
-        statusHint = latestShift.status;
-      }
+        statusHint = latestShift?.status;
+      } 
+      console.log('MALIKKING', activeAssignment);
       if (activeAssignment) {
         statusHint = 'BUSY';
       }
-
+        console.log(`🚗 Driver ${driver.id} status hint:`, statusHint);
       const normalizedStatus = normalizeStatus(statusHint);
-
+       console.log(`🚗 Driver ${driver.id} status hintxxx:`, normalizedStatus);
       const currentZone = dispatchMeta.currentZone || null;
       const zoneInfo = currentZone?.id ? zoneMap.get(currentZone.id) : null;
       const zoneQueue = zoneInfo?.queue || [];
@@ -1107,7 +1286,7 @@ const getDispatchDriversHandler = async (req, res) => {
         currentZoneName: currentZone?.name || zoneInfo?.name || null,
         queuePosition,
         rating: ratingValue,
-        currentJobId: driver.currentJobId || activeAssignment?.jobId || null,
+        currentJobId: activeAssignment?.jobId || null,
       };
     });
 
@@ -1220,11 +1399,47 @@ const getDispatchJobsHandler = async (req, res) => {
       };
     }
 
+    // For COMPLETED and CANCELLED jobs, only show today's jobs
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+
+    const whereClause = {
+      companyId,
+      ...(statusFilter ? { status: statusFilter } : {}),
+    };
+
+    // If filtering for COMPLETED or CANCELLED, add date filter
+    const requestedStatuses = statusFilter?.in || [];
+    const hasCompletedOrCancelled = requestedStatuses.some(s => 
+      s === 'COMPLETED' || s === 'CANCELLED'
+    );
+
+    if (hasCompletedOrCancelled) {
+      // Only apply date filter for COMPLETED/CANCELLED
+      // Use updatedAt since CANCELLED jobs don't have cancelledAt field
+      whereClause.OR = [
+        // COMPLETED jobs from today only (based on completedAt timestamp)
+        {
+          status: 'COMPLETED',
+          completedAt: { gte: todayStart }
+        },
+        // CANCELLED jobs from today only (based on updatedAt since no cancelledAt exists)
+        {
+          status: 'CANCELLED',
+          updatedAt: { gte: todayStart }
+        },
+        // All other statuses (no date restriction)
+        {
+          status: { 
+            notIn: ['COMPLETED', 'CANCELLED'] 
+          }
+        }
+      ];
+      delete whereClause.status; // Remove the status filter since we're using OR
+    }
+
     const jobs = await prisma.job.findMany({
-      where: {
-        companyId,
-        ...(statusFilter ? { status: statusFilter } : {}),
-      },
+      where: whereClause,
       include: dispatchJobInclude,
       orderBy: { createdAt: 'desc' },
       take: parseInt(limit, 10),
@@ -1267,11 +1482,35 @@ router.get(
     try {
       const companyId = req.user.companyId;
 
+      // Get start of today for filtering completed/cancelled jobs
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+
+      // Get all jobs grouped by status
       const grouped = await prisma.job.groupBy({
         by: ['status'],
         where: { companyId },
         _count: { status: true },
       });
+
+      // Get today's completed and cancelled jobs count
+      // Note: Using updatedAt for cancelled jobs since there's no cancelledAt field in the schema
+      const [todayCompleted, todayCancelled] = await Promise.all([
+        prisma.job.count({
+          where: {
+            companyId,
+            status: 'COMPLETED',
+            completedAt: { gte: todayStart }
+          }
+        }),
+        prisma.job.count({
+          where: {
+            companyId,
+            status: 'CANCELLED',
+            updatedAt: { gte: todayStart }
+          }
+        })
+      ]);
 
       const counters = {
         unassigned: 0,
@@ -1283,6 +1522,7 @@ router.get(
         noShow: 0,
       };
 
+      // Process all statuses except COMPLETED and CANCELLED
       grouped.forEach(({ status, _count }) => {
         const count = _count?.status || 0;
         if (!count) {
@@ -1290,6 +1530,11 @@ router.get(
         }
 
         const normalized = String(status || '').toUpperCase();
+
+        // Skip COMPLETED and CANCELLED - will use today's count instead
+        if (normalized === 'COMPLETED' || normalized === 'CANCELLED') {
+          return;
+        }
 
         if (normalized === 'NOSHOW' || normalized === 'NO_SHOW') {
           counters.noShow += count;
@@ -1305,6 +1550,10 @@ router.get(
         const key = mapJobStatusToCounter(normalized);
         counters[key] = (counters[key] || 0) + count;
       });
+
+      // Add today's COMPLETED and CANCELLED counts
+      counters.finished = todayCompleted;
+      counters.cancelled = todayCancelled;
 
       res.json({
         success: true,
@@ -2636,13 +2885,20 @@ router.get('/drivers',
         const assignedVehicle = shift.driver.assignedVehicles?.[0]?.vehicle || null;
         const vehicleTypeInfo = assignedVehicle?.vehicleType ? vehicleTypeIcons[assignedVehicle.vehicleType] : null;
 
+        // ✅ FIXED: Get status from driver preferences, not shift
+        // Priority: preferences.driverStatus > preferences.dispatch.status > shift.status
+        const driverStatus = 
+          shift.driver.preferences?.driverStatus || 
+          shift.driver.preferences?.dispatch?.status || 
+          shift.status;
+
         return {
           id: shift.driver.id,
           firstName: shift.driver.firstName,
           lastName: shift.driver.lastName,
           fullName: `${shift.driver.firstName} ${shift.driver.lastName}`.trim(),
           phone: shift.driver.phone,
-          status: shift.status,
+          status: driverStatus, // ✅ FIXED: Use driver status from preferences
           companyId: shift.driver.companyId,
           companyName: shift.driver.company?.legalName || shift.driver.company?.name || 'Unknown',
           shiftStartTime: shift.startTime?.toISOString(),

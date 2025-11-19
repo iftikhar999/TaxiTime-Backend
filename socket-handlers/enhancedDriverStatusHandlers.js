@@ -122,8 +122,8 @@ const assignmentStatusMap = {
     REJECTED: 'REJECTED',
     NOSHOW: 'CANCELLED',
     NO_SHOW: 'CANCELLED',
-    RECALL: 'CANCELLED',
-    RECALLED: 'CANCELLED',
+    RECALL: 'RECALLED',
+    RECALLED: 'RECALLED',
     UNASSIGNED: 'CANCELLED',
     PENDING: 'CANCELLED',
 };
@@ -198,12 +198,33 @@ const updateDriverCurrentJob = async (driverId, jobId = null) => {
     }
 
     try {
+        // Get current preferences
+        const user = await prisma.user.findUnique({
+            where: { id: driverId },
+            select: { preferences: true }
+        });
+
+        const currentPrefs = typeof user?.preferences === 'object' ? user.preferences : {};
+        const dispatchPrefs = currentPrefs.dispatch && typeof currentPrefs.dispatch === 'object' 
+            ? { ...currentPrefs.dispatch } 
+            : {};
+
+        // Update currentJobId in preferences.dispatch
+        dispatchPrefs.currentJobId = jobId ?? null;
+
+        const updatedPrefs = {
+            ...currentPrefs,
+            dispatch: dispatchPrefs,
+        };
+
         await prisma.user.update({
             where: { id: driverId },
             data: {
-                currentJobId: jobId ?? null,
+                preferences: updatedPrefs,
             },
         });
+        
+        console.log(`✅ Updated currentJobId for driver ${driverId}: ${jobId ?? 'null'}`);
     } catch (error) {
         console.warn(
             `[Socket] Failed to update current job reference for driver ${driverId}:`,
@@ -1066,7 +1087,7 @@ module.exports = (io, socket, driverId, companyId, queueService) => {
                     }
                 });
 
-                await prisma.offer.updateMany({
+                await prisma.offers.updateMany({
                     where: {
                         jobId,
                         driverId,
@@ -1334,7 +1355,7 @@ module.exports = (io, socket, driverId, companyId, queueService) => {
                 }
 
                 if (Object.keys(offerStatusUpdate).length > 0) {
-                    await prisma.offer.updateMany({
+                    await prisma.offers.updateMany({
                         where: {
                             jobId,
                             driverId,
@@ -1373,6 +1394,11 @@ module.exports = (io, socket, driverId, companyId, queueService) => {
                     } else if (assignmentStatus === 'CANCELLED') {
                         assignmentUpdate.rejectionReason =
                             payload.reason || payload.rejectionReason || activeAssignment.rejectionReason || null;
+                    } else if (assignmentStatus === 'RECALLED') {
+                        assignmentUpdate.rejectedAt = progressTimestamp;
+                        assignmentUpdate.respondedAt = progressTimestamp;
+                        assignmentUpdate.rejectionReason =
+                            payload.reason || payload.rejectionReason || 'Job recalled';
                     } else if (assignmentStatus === 'COMPLETED') {
                         assignmentUpdate.acceptedAt =
                             activeAssignment.acceptedAt || activeAssignment.assignedAt;

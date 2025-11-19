@@ -106,9 +106,18 @@ class QueueManagementService {
                 isActive: true,
                 companyId: true,
                 preferences: true,
-                currentJobId: true,
                 firstName: true,
                 lastName: true,
+                assignments: {
+                    where: {
+                        status: {
+                            in: ['ASSIGNED', 'ACCEPTED'],
+                        },
+                    },
+                    orderBy: { assignedAt: 'desc' },
+                    take: 1,
+                    select: { jobId: true },
+                },
             },
         });
 
@@ -119,6 +128,7 @@ class QueueManagementService {
         return {
             ...driver,
             preferences: cloneJson(driver.preferences),
+            currentJobId: driver.assignments?.[0]?.jobId || null,
         };
     }
 
@@ -640,9 +650,30 @@ class QueueManagementService {
             await this.removeDriverFromAllQueues(driverId, driver.companyId);
         }
 
+        // ✅ FIXED: Include zoneName from driver preferences, or fetch from DB if missing
+        let currentZoneName = 
+            dispatchMeta?.currentZone?.name ||
+            driver.preferences?.dispatch?.currentZone?.name ||
+            null;
+
+        // If we have zoneId but no name, fetch it from the database
+        if (currentZoneId && !currentZoneName) {
+            try {
+                const zone = await prisma.zones.findUnique({
+                    where: { id: currentZoneId },
+                    select: { name: true }
+                });
+                currentZoneName = zone?.name || null;
+                console.log(`🔍 Fetched zone name for ${currentZoneId}: ${currentZoneName}`);
+            } catch (error) {
+                console.error(`❌ Error fetching zone name for ${currentZoneId}:`, error);
+            }
+        }
+
         await this.emitDriverZoneChange(driver, {
             driverId,
             zoneId: currentZoneId,
+            zoneName: currentZoneName, // ✅ FIXED: Added missing zoneName
             status: newStatus,
             updatedAt: new Date().toISOString(),
         });

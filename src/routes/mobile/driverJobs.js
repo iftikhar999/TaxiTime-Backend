@@ -1454,6 +1454,7 @@ router.post('/payment', authenticateToken, async (req, res) => {
         });
 
         const jobUpdateData = {
+            status: 'COMPLETED', // ✅ Set job status to COMPLETED
             actualFare: amountValue,
             finalAmount: amountValue,
             paymentMethod: normalizedMethod,
@@ -1597,32 +1598,30 @@ router.post('/payment', authenticateToken, async (req, res) => {
 
         // ✅ FIX: Clear driver's currentJobId and update status to AVAILABLE after payment
         try {
-            // Update user's currentJobId to NULL (job is completed)
+            // Get current user preferences
+            const user = await prisma.user.findUnique({
+                where: { id: driverId },
+                select: { preferences: true },
+            });
+
+            // Update user's currentJobId to NULL and set status to AVAILABLE in preferences
+            const currentPreferences = (user && typeof user.preferences === 'object' && user.preferences !== null) 
+                ? user.preferences 
+                : {};
+            
+            const updatedPreferences = {
+                ...currentPreferences,
+                driverStatus: 'AVAILABLE',
+                lastStatusChange: new Date().toISOString(),
+            };
+
             await prisma.user.update({
                 where: { id: driverId },
                 data: {
                     currentJobId: null,
+                    preferences: updatedPreferences,
                 },
             });
-
-            // Update driver preferences to set status back to AVAILABLE
-            const driverPrefs = await prisma.driver_preferences.findUnique({
-                where: { driverId },
-            });
-
-            if (driverPrefs) {
-                const updatedPreferences = {
-                    ...(typeof driverPrefs.preferences === 'object' ? driverPrefs.preferences : {}),
-                    driverStatus: 'AVAILABLE',
-                };
-
-                await prisma.driver_preferences.update({
-                    where: { driverId },
-                    data: {
-                        preferences: updatedPreferences,
-                    },
-                });
-            }
 
             // ✅ Emit socket event to dispatch to update driver status in real-time
             if (req.io) {
