@@ -47,12 +47,13 @@ const earningsService = new EarningsService();
 // Middleware
 app.use(helmet());
 app.use(compression());
-// Configure CORS origins
-const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || process.env.FRONTEND_URLS?.split(',') || ["http://localhost:3000", "http://localhost:3001", "http://localhost:3002", "http://localhost:3003", "http://localhost:3004", "http://localhost:3005", "http://localhost:3006", "http://localhost:3007", "http://localhost:3008", "http://localhost:3009", "http://localhost:3010"];
-console.log('🔗 CORS Allowed Origins:', allowedOrigins);
+// Configure CORS origins - Allow all origins for development/testing
+// In production, set ALLOWED_ORIGINS environment variable to restrict
+const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || process.env.FRONTEND_URLS?.split(',') || null;
+console.log('🔗 CORS Allowed Origins:', allowedOrigins || 'ALL (development mode)');
 
 app.use(cors({
-  origin: allowedOrigins,
+  origin: allowedOrigins ? allowedOrigins : true, // true = allow all origins
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
