@@ -317,7 +317,6 @@ router.post('/jobs/:jobId/queue', auth, async (req, res) => {
           connect: { id: driverId }
         },
         status: 'QUEUED', // New status for queued jobs
-        assignedAt: new Date(),
       },
     });
     
@@ -406,7 +405,6 @@ router.delete('/jobs/:jobId/queue', auth, async (req, res) => {
             disconnect: true
           },
           status: 'PENDING',
-          assignedAt: null,
         },
       });
       
@@ -633,8 +631,7 @@ router.post('/jobs/:jobId/claim', auth, async (req, res) => {
         users_jobs_assignedDriverIdTousers: {
           connect: { id: driverId }
         },
-        assignedAt: new Date(),
-        ...(autoStart ? { onTheWayAt: new Date() } : {}),
+        ...(autoStart ? { startedAt: new Date() } : {}),
       },
       include: {
         users_jobs_customerIdTousers: {
