@@ -646,12 +646,16 @@ router.post('/jobs/:jobId/claim', auth, async (req, res) => {
     });
     
     // Create assignment record
-    await prisma.assignment.create({
+    const { v4: uuidv4 } = require('uuid');
+    await prisma.assignments.create({
       data: {
+        id: uuidv4(),
         jobId: jobId,
         driverId: driverId,
+        assignedBy: driverId, // Self-assigned by driver
         status: 'ACCEPTED',
         acceptedAt: new Date(),
+        updatedAt: new Date(),
       },
     }).catch(err => {
       console.warn('Failed to create assignment record:', err.message);
