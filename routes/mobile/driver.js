@@ -593,7 +593,7 @@ router.post('/jobs/:jobId/claim', auth, async (req, res) => {
     const job = await prisma.job.findUnique({
       where: { id: jobId },
       include: {
-        customer: {
+        users_jobs_customerIdTousers: {
           select: {
             id: true,
             firstName: true,
@@ -638,7 +638,7 @@ router.post('/jobs/:jobId/claim', auth, async (req, res) => {
         ...(autoStart ? { onTheWayAt: new Date() } : {}),
       },
       include: {
-        customer: {
+        users_jobs_customerIdTousers: {
           select: {
             id: true,
             firstName: true,
