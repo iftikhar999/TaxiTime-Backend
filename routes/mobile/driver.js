@@ -178,18 +178,12 @@ router.get('/jobs/nearby', auth, async (req, res) => {
         ...(excludeJobId ? { id: { not: excludeJobId } } : {}),
       },
       include: {
-        customer: {
+        users_jobs_customerIdTousers: {
           select: {
             id: true,
             firstName: true,
             lastName: true,
             phone: true,
-          },
-        },
-        tariff: {
-          select: {
-            id: true,
-            name: true,
           },
         },
       },
@@ -207,6 +201,8 @@ router.get('/jobs/nearby', auth, async (req, res) => {
           job.pickupLongitude
         );
         
+        const customer = job.users_jobs_customerIdTousers;
+        
         return {
           id: job.id,
           jobId: job.jobId,
@@ -219,16 +215,14 @@ router.get('/jobs/nearby', auth, async (req, res) => {
           dropoffLatitude: job.dropoffLatitude,
           dropoffLongitude: job.dropoffLongitude,
           estimatedFare: job.estimatedPrice,
-          fare: job.fare,
+          fare: job.actualFare || job.estimatedPrice,
           estimatedDistance: job.estimatedDistance,
           distanceToPickup: Math.round(distance * 10) / 10,
-          customer: job.customer ? {
-            id: job.customer.id,
-            name: `${job.customer.firstName || ''} ${job.customer.lastName || ''}`.trim() || 'Customer',
-            phone: job.customer.phone,
+          customer: customer ? {
+            id: customer.id,
+            name: `${customer.firstName || ''} ${customer.lastName || ''}`.trim() || 'Customer',
+            phone: customer.phone,
           } : null,
-          zoneId: job.zoneId,
-          tariffName: job.tariff?.name,
           vehicleType: job.vehicleType,
           createdAt: job.createdAt,
         };
