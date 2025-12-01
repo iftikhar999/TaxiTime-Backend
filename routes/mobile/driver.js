@@ -126,57 +126,65 @@ function calculateDistanceKm(lat1, lon1, lat2, lon2) {
 
 /**
  * @route GET /api/mobile/driver/jobs/nearby
- * @desc Get pending jobs within specified radius of driver's location
+ * @desc Get pending jobs in the same zone as driver (for job queue feature)
  * @access Private (Driver only)
- * @query latitude - Driver's current latitude
- * @query longitude - Driver's current longitude
- * @query radius - Search radius in km (default: 3)
+ * @query latitude - Driver's current latitude (optional, for distance calc)
+ * @query longitude - Driver's current longitude (optional, for distance calc)
+ * @query zoneId - Zone ID to filter by (optional, uses driver's current zone if not provided)
  * @query limit - Max jobs to return (default: 10)
  * @query excludeJobId - Job ID to exclude (current job)
  */
 router.get('/jobs/nearby', auth, async (req, res) => {
   try {
     const driverId = req.user.id;
-    const { latitude, longitude, radius = 3, limit = 10, excludeJobId } = req.query;
+    const { latitude, longitude, zoneId, limit = 10, excludeJobId } = req.query;
     
-    const driverLat = Number.parseFloat(latitude);
-    const driverLng = Number.parseFloat(longitude);
-    const searchRadius = Number.parseFloat(radius);
+    const driverLat = latitude ? Number.parseFloat(latitude) : null;
+    const driverLng = longitude ? Number.parseFloat(longitude) : null;
     const maxResults = Number.parseInt(limit, 10);
     
-    if (!Number.isFinite(driverLat) || !Number.isFinite(driverLng)) {
-      return res.status(400).json({ error: 'Valid latitude and longitude required' });
-    }
-    
-    console.log(`🔍 [JobQueue] Fetching nearby jobs for driver ${driverId}:`, {
-      lat: driverLat,
-      lng: driverLng,
-      radius: searchRadius,
-    });
-    
-    // Get driver's company
+    // Get driver's company and current zone
     const driver = await prisma.user.findUnique({
       where: { id: driverId },
-      select: { companyId: true, zoneId: true },
+      select: { 
+        companyId: true, 
+        zoneId: true,
+        preferences: true,
+      },
     });
     
     if (!driver?.companyId) {
       return res.status(400).json({ error: 'Driver not associated with a company' });
     }
     
-    // Find pending/unassigned jobs for the same company
-    const pendingJobs = await prisma.job.findMany({
-      where: {
-        companyId: driver.companyId,
-        status: {
-          in: ['PENDING', 'UNASSIGNED'],
-        },
-        // Only jobs with valid pickup coordinates
-        pickupLatitude: { not: null },
-        pickupLongitude: { not: null },
-        // Exclude current job if specified
-        ...(excludeJobId ? { id: { not: excludeJobId } } : {}),
+    // Determine zone to filter by (priority: query param > driver's current zone > driver preferences)
+    const prefs = driver.preferences || {};
+    const filterZoneId = zoneId || driver.zoneId || prefs.currentZoneId || null;
+    
+    console.log(`🔍 [JobQueue] Fetching nearby jobs for driver ${driverId}:`, {
+      zoneId: filterZoneId,
+      lat: driverLat,
+      lng: driverLng,
+    });
+    
+    // Build where clause - filter by zone if available
+    const whereClause = {
+      companyId: driver.companyId,
+      status: {
+        in: ['PENDING', 'UNASSIGNED'],
       },
+      // Exclude current job if specified
+      ...(excludeJobId ? { id: { not: excludeJobId } } : {}),
+    };
+    
+    // Add zone filter if we have a zone ID
+    if (filterZoneId) {
+      whereClause.zoneId = filterZoneId;
+    }
+    
+    // Find pending/unassigned jobs for the same company and zone
+    const pendingJobs = await prisma.job.findMany({
+      where: whereClause,
       include: {
         users_jobs_customerIdTousers: {
           select: {
@@ -188,56 +196,68 @@ router.get('/jobs/nearby', auth, async (req, res) => {
         },
       },
       orderBy: { createdAt: 'asc' },
-      take: 100, // Get more than needed to filter by distance
+      take: maxResults,
     });
     
-    // Filter by distance and add distance info
-    const nearbyJobs = pendingJobs
-      .map(job => {
+    // Map jobs and calculate distance if coordinates provided
+    const nearbyJobs = pendingJobs.map(job => {
+      let distanceToPickup = null;
+      
+      // Calculate distance only if driver coordinates and job pickup coordinates are available
+      if (driverLat && driverLng && job.pickupLatitude && job.pickupLongitude) {
         const distance = calculateDistanceKm(
           driverLat,
           driverLng,
           job.pickupLatitude,
           job.pickupLongitude
         );
-        
-        const customer = job.users_jobs_customerIdTousers;
-        
-        return {
-          id: job.id,
-          jobId: job.jobId,
-          publicJobId: job.jobId,
-          status: job.status,
-          pickupAddress: job.pickupAddress,
-          pickupLatitude: job.pickupLatitude,
-          pickupLongitude: job.pickupLongitude,
-          dropoffAddress: job.dropoffAddress,
-          dropoffLatitude: job.dropoffLatitude,
-          dropoffLongitude: job.dropoffLongitude,
-          estimatedFare: job.estimatedPrice,
-          fare: job.actualFare || job.estimatedPrice,
-          estimatedDistance: job.estimatedDistance,
-          distanceToPickup: Math.round(distance * 10) / 10,
-          customer: customer ? {
-            id: customer.id,
-            name: `${customer.firstName || ''} ${customer.lastName || ''}`.trim() || 'Customer',
-            phone: customer.phone,
-          } : null,
-          vehicleType: job.vehicleType,
-          createdAt: job.createdAt,
-        };
-      })
-      .filter(job => job.distanceToPickup <= searchRadius)
-      .sort((a, b) => a.distanceToPickup - b.distanceToPickup)
-      .slice(0, maxResults);
+        distanceToPickup = Math.round(distance * 10) / 10;
+      }
+      
+      const customer = job.users_jobs_customerIdTousers;
+      
+      return {
+        id: job.id,
+        jobId: job.jobId,
+        publicJobId: job.jobId,
+        status: job.status,
+        pickupAddress: job.pickupAddress,
+        pickupLatitude: job.pickupLatitude,
+        pickupLongitude: job.pickupLongitude,
+        dropoffAddress: job.dropoffAddress,
+        dropoffLatitude: job.dropoffLatitude,
+        dropoffLongitude: job.dropoffLongitude,
+        estimatedFare: job.estimatedPrice,
+        fare: job.actualFare || job.estimatedPrice,
+        estimatedDistance: job.estimatedDistance,
+        distanceToPickup,
+        zoneId: job.zoneId,
+        customer: customer ? {
+          id: customer.id,
+          name: `${customer.firstName || ''} ${customer.lastName || ''}`.trim() || 'Customer',
+          phone: customer.phone,
+        } : null,
+        vehicleType: job.vehicleType,
+        createdAt: job.createdAt,
+      };
+    });
     
-    console.log(`✅ [JobQueue] Found ${nearbyJobs.length} nearby jobs within ${searchRadius}km`);
+    // Sort by distance if available, otherwise by creation time
+    if (driverLat && driverLng) {
+      nearbyJobs.sort((a, b) => {
+        if (a.distanceToPickup === null) return 1;
+        if (b.distanceToPickup === null) return -1;
+        return a.distanceToPickup - b.distanceToPickup;
+      });
+    }
+    
+    console.log(`✅ [JobQueue] Found ${nearbyJobs.length} jobs in zone ${filterZoneId || 'any'}`);
     
     res.json({
       jobs: nearbyJobs,
       total: nearbyJobs.length,
-      searchRadius,
-      driverLocation: { latitude: driverLat, longitude: driverLng },
+      zoneId: filterZoneId,
+      driverLocation: driverLat && driverLng ? { latitude: driverLat, longitude: driverLng } : null,
     });
     
   } catch (error) {
