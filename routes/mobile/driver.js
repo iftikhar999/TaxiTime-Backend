@@ -601,7 +601,6 @@ router.post('/jobs/:jobId/claim', auth, async (req, res) => {
             phone: true,
           },
         },
-        tariff: true,
       },
     });
     
@@ -646,7 +645,6 @@ router.post('/jobs/:jobId/claim', auth, async (req, res) => {
             phone: true,
           },
         },
-        tariff: true,
       },
     });
     
