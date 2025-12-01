@@ -313,7 +313,9 @@ router.post('/jobs/:jobId/queue', auth, async (req, res) => {
     await prisma.job.update({
       where: { id: jobId },
       data: { 
-        assignedDriverId: driverId,
+        users_jobs_assignedDriverIdTousers: {
+          connect: { id: driverId }
+        },
         status: 'QUEUED', // New status for queued jobs
         assignedAt: new Date(),
       },
@@ -400,7 +402,9 @@ router.delete('/jobs/:jobId/queue', auth, async (req, res) => {
       await prisma.job.update({
         where: { id: jobId },
         data: { 
-          assignedDriverId: null,
+          users_jobs_assignedDriverIdTousers: {
+            disconnect: true
+          },
           status: 'PENDING',
           assignedAt: null,
         },
@@ -626,7 +630,9 @@ router.post('/jobs/:jobId/claim', auth, async (req, res) => {
       where: { id: jobId },
       data: {
         status: newStatus,
-        assignedDriverId: driverId,
+        users_jobs_assignedDriverIdTousers: {
+          connect: { id: driverId }
+        },
         assignedAt: new Date(),
         ...(autoStart ? { onTheWayAt: new Date() } : {}),
       },
