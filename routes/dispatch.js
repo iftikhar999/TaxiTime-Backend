@@ -1077,13 +1077,16 @@ const getDispatchDriversHandler = async (req, res) => {
     const { latitude, longitude, radius = 5, companyId: companyIdQuery } = req.query;
     const companyId = req.user.companyId ?? companyIdQuery;
     console.log('✅ Dispatch get drivers - companyId:', companyId);
-    const companyFilter = companyId ? { companyId: String(companyId) } : {};
+    
+    // Simple company filter for zones (zones only have companyId)
+    const zoneCompanyFilter = companyId ? { companyId: String(companyId) } : {};
 
-    const [drivers, zones] = await Promise.all([
+    // Fetch ALL active drivers first (we'll filter by company after fetching)
+    // because drivers are linked to companies via company_drivers table, not User.companyId
+    const [allDrivers, zones] = await Promise.all([
       prisma.user.findMany({
         where: {
           role: 'DRIVER',
-          ...companyFilter,
           isActive: true,
           OR: [
             {
@@ -1111,6 +1114,16 @@ const getDispatchDriversHandler = async (req, res) => {
           preferences: true,
           rating: true,
           updatedAt: true,
+          companyId: true,
+          company_drivers: {
+            select: {
+              companyId: true,
+              status: true,
+              companies: {
+                select: { id: true, name: true, legalName: true }
+              }
+            }
+          },
           shifts: {
             where: { endTime: null },
             orderBy: { startTime: 'desc' },
@@ -1145,7 +1158,7 @@ const getDispatchDriversHandler = async (req, res) => {
       prisma.zones.findMany({
         where: {
           isActive: true,
-          ...companyFilter,
+          ...zoneCompanyFilter,
         },
         select: {
           id: true,
@@ -1154,6 +1167,24 @@ const getDispatchDriversHandler = async (req, res) => {
         },
       }),
     ]);
+
+    // Filter drivers by company using company_drivers relationship
+    // Drivers can be linked via User.companyId OR company_drivers table
+    const drivers = companyId 
+      ? allDrivers.filter(driver => {
+          // Check if driver is directly linked to this company
+          if (driver.companyId === String(companyId)) return true;
+          // Check if driver is linked via company_drivers table
+          if (driver.company_drivers && driver.company_drivers.length > 0) {
+            return driver.company_drivers.some(cd => 
+              cd.companyId === String(companyId) && cd.status === 'ACTIVE'
+            );
+          }
+          return false;
+        })
+      : allDrivers;
+    
+    console.log(`✅ Filtered ${allDrivers.length} drivers down to ${drivers.length} for company ${companyId}`);
 
     const zoneMap = new Map(
       zones.map((zone) => [zone.id, { name: zone.name, queue: normalizeDriverQueue(zone.queue) }])
@@ -1745,14 +1776,22 @@ router.post('/jobs', authenticateToken, authorizeRoles(...allowedDispatchRoles),
       lng: toNumber(pickupLongitude, pickup?.lng ?? pickup?.longitude),
     };
 
-    const resolvedDropoff = {
-      address: dropoffAddress || destination?.address || destination?.name,
+    // Dropoff is optional - set to null/undefined if not provided
+    const hasDropoff = destination || dropoffAddress || dropoffLatitude || dropoffLongitude;
+    const resolvedDropoff = hasDropoff ? {
+      address: dropoffAddress || destination?.address || destination?.name || null,
       lat: toNumber(dropoffLatitude, destination?.lat ?? destination?.latitude),
       lng: toNumber(dropoffLongitude, destination?.lng ?? destination?.longitude),
-    };
+    } : null;
 
-    if ([resolvedPickup.lat, resolvedPickup.lng, resolvedDropoff.lat, resolvedDropoff.lng].some(value => value === null || Number.isNaN(value))) {
-      throw new Error('Invalid pickup or dropoff coordinates');
+    // Only validate pickup coordinates - dropoff is optional
+    if ([resolvedPickup.lat, resolvedPickup.lng].some(value => value === null || Number.isNaN(value))) {
+      throw new Error('Invalid pickup coordinates');
+    }
+
+    // If dropoff is provided, validate its coordinates
+    if (resolvedDropoff && [resolvedDropoff.lat, resolvedDropoff.lng].some(value => value === null || Number.isNaN(value))) {
+      throw new Error('Invalid dropoff coordinates - please provide valid coordinates or leave dropoff empty');
     }
 
     const normalizedPaymentMethod = (paymentMethod || 'CARD')
@@ -1789,17 +1828,20 @@ router.post('/jobs', authenticateToken, authorizeRoles(...allowedDispatchRoles),
       verifiedPaymentIntentId = paymentIntent.id;
     }
 
-    // Get price estimate
-    const priceEstimate = await pricingService.calculatePrice({
-      companyId: resolvedCompanyId,
-      vehicleType: vehicleType || 'SEDAN',
-      pickupLatitude: resolvedPickup.lat,
-      pickupLongitude: resolvedPickup.lng,
-      dropoffLatitude: resolvedDropoff.lat,
-      dropoffLongitude: resolvedDropoff.lng,
-      scheduledTime,
-      jobType: jobType,
-    });
+    // Get price estimate - only if dropoff is provided
+    let priceEstimate = { finalPrice: null, distance: null, estimatedTime: null };
+    if (resolvedDropoff) {
+      priceEstimate = await pricingService.calculatePrice({
+        companyId: resolvedCompanyId,
+        vehicleType: vehicleType || 'SEDAN',
+        pickupLatitude: resolvedPickup.lat,
+        pickupLongitude: resolvedPickup.lng,
+        dropoffLatitude: resolvedDropoff.lat,
+        dropoffLongitude: resolvedDropoff.lng,
+        scheduledTime,
+        jobType: jobType,
+      });
+    }
 
     const normalizedPhone = (passengerPhone || phone || '').toString().trim() || null;
     const normalizedEmail = (passengerEmail || email || '').toString().trim() || null;
@@ -1829,13 +1871,18 @@ router.post('/jobs', authenticateToken, authorizeRoles(...allowedDispatchRoles),
         normalizedEmail ||
         `guest-${Date.now()}-${Math.random().toString(36).slice(2)}@dispatch.local`;
 
+      // Generate fallback phone if not provided (required field with unique constraint)
+      const fallbackPhone =
+        normalizedPhone ||
+        `+0000000${Date.now().toString().slice(-8)}`;
+
       const createdPassenger = await prisma.user.create({
         data: {
           id: randomUUID(),
           firstName,
           lastName,
           email: fallbackEmail,
-          phone: normalizedPhone || undefined,
+          phone: fallbackPhone,
           password,
           role: 'PASSENGER',
           isActive: true,
@@ -1853,7 +1900,7 @@ router.post('/jobs', authenticateToken, authorizeRoles(...allowedDispatchRoles),
       resolvedCustomerId = req.user.id;
     }
 
-    // Create job
+    // Create job - dropoff fields are optional
     const jobData = {
       type: jobType,
       customerId: resolvedCustomerId,
@@ -1861,13 +1908,13 @@ router.post('/jobs', authenticateToken, authorizeRoles(...allowedDispatchRoles),
       pickupAddress: resolvedPickup.address,
       pickupLatitude: resolvedPickup.lat,
       pickupLongitude: resolvedPickup.lng,
-      dropoffAddress: resolvedDropoff.address,
-      dropoffLatitude: resolvedDropoff.lat,
-      dropoffLongitude: resolvedDropoff.lng,
+      dropoffAddress: resolvedDropoff?.address || null,
+      dropoffLatitude: resolvedDropoff?.lat || null,
+      dropoffLongitude: resolvedDropoff?.lng || null,
       vehicleType: vehicleType || 'SEDAN',
-      estimatedPrice: estimatedFare ?? priceEstimate.finalPrice,
-      estimatedDistance: estimatedDistance ?? priceEstimate.distance,
-      estimatedDuration: estimatedDuration ?? priceEstimate.estimatedTime,
+      estimatedPrice: estimatedFare ?? priceEstimate.finalPrice ?? null,
+      estimatedDistance: estimatedDistance ?? priceEstimate.distance ?? null,
+      estimatedDuration: estimatedDuration ?? priceEstimate.estimatedTime ?? null,
       scheduledAt: scheduledTime ? new Date(scheduledTime) : null,
       estimatedArrival: priceEstimate.estimatedTime
         ? new Date(Date.now() + priceEstimate.estimatedTime * 60 * 1000)
@@ -2785,6 +2832,8 @@ router.get('/drivers',
       console.log('[Dispatch] Fetching online drivers list');
 
       const includeOffline = req.query.include_offline === 'true';
+      const userCompanyId = req.user.companyId;
+      const isSuperAdmin = req.user.role === 'SUPER_ADMIN';
 
       const whereCondition = {
         endTime: null,
@@ -2795,9 +2844,17 @@ router.get('/drivers',
       };
 
       // Filter by company if user is not super admin
-      if (req.user.role !== 'SUPER_ADMIN' && req.user.companyId) {
-        whereCondition.driver = { companyId: req.user.companyId };
+      // Use company_drivers relationship since drivers are linked via that table
+      if (!isSuperAdmin && userCompanyId) {
+        whereCondition.driver = {
+          OR: [
+            { companyId: userCompanyId },
+            { company_drivers: { some: { companyId: userCompanyId, status: 'ACTIVE' } } }
+          ]
+        };
       }
+
+      console.log('[Dispatch] Filter condition:', JSON.stringify(whereCondition, null, 2));
 
       const onlineDrivers = await prisma.shift.findMany({
         where: whereCondition,
@@ -2810,6 +2867,21 @@ router.get('/drivers',
               phone: true,
               companyId: true,
               preferences: true,
+              company_drivers: {
+                where: userCompanyId && !isSuperAdmin ? { companyId: userCompanyId } : undefined,
+                take: 1,
+                select: {
+                  companyId: true,
+                  status: true,
+                  companies: {
+                    select: {
+                      id: true,
+                      name: true,
+                      legalName: true
+                    }
+                  }
+                }
+              },
               locationUpdates: {
                 orderBy: [
                   { timestamp: 'desc' },
@@ -2892,6 +2964,15 @@ router.get('/drivers',
           shift.driver.preferences?.dispatch?.status || 
           shift.status;
 
+        // Get company from company_drivers or fallback to direct company relationship
+        const companyDriverRecord = shift.driver.company_drivers?.[0];
+        const driverCompanyId = companyDriverRecord?.companyId || shift.driver.companyId;
+        const driverCompanyName = companyDriverRecord?.companies?.legalName || 
+                                   companyDriverRecord?.companies?.name || 
+                                   shift.driver.company?.legalName || 
+                                   shift.driver.company?.name || 
+                                   'Unknown';
+
         return {
           id: shift.driver.id,
           firstName: shift.driver.firstName,
@@ -2899,8 +2980,8 @@ router.get('/drivers',
           fullName: `${shift.driver.firstName} ${shift.driver.lastName}`.trim(),
           phone: shift.driver.phone,
           status: driverStatus, // ✅ FIXED: Use driver status from preferences
-          companyId: shift.driver.companyId,
-          companyName: shift.driver.company?.legalName || shift.driver.company?.name || 'Unknown',
+          companyId: driverCompanyId,
+          companyName: driverCompanyName,
           shiftStartTime: shift.startTime?.toISOString(),
           location: lastLocation ? {
             latitude: parseFloat(lastLocation.latitude),
