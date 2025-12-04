@@ -665,10 +665,21 @@ router.post('/jobs/:jobId/claim', auth, async (req, res) => {
       },
     });
     
-    // Create assignment record
+    // Create or update assignment record (upsert to handle if already exists)
     const { v4: uuidv4 } = require('uuid');
-    await prisma.assignments.create({
-      data: {
+    await prisma.assignments.upsert({
+      where: {
+        jobId_driverId: {
+          jobId: jobId,
+          driverId: driverId,
+        },
+      },
+      update: {
+        status: 'ACCEPTED',
+        acceptedAt: new Date(),
+        updatedAt: new Date(),
+      },
+      create: {
         id: uuidv4(),
         jobId: jobId,
         driverId: driverId,
@@ -678,7 +689,7 @@ router.post('/jobs/:jobId/claim', auth, async (req, res) => {
         updatedAt: new Date(),
       },
     }).catch(err => {
-      console.warn('Failed to create assignment record:', err.message);
+      console.warn('Failed to upsert assignment record:', err.message);
     });
     
     // Clear queued job from driver preferences if this was the queued job
@@ -695,9 +706,8 @@ router.post('/jobs/:jobId/claim', auth, async (req, res) => {
       });
     }
     
-    // Emit socket event to notify dispatch
-    const { getNamespace } = require('../../socket');
-    const dispatchNamespace = getNamespace('dispatchNamespace');
+    // Emit socket event to notify dispatch using global namespace
+    const dispatchNamespace = global.dispatchNamespace;
     if (dispatchNamespace) {
       dispatchNamespace.to(`company_${driver.companyId}`).emit('job:progress:updated', {
         jobId: jobId,

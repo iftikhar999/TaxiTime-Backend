@@ -1135,10 +1135,16 @@ const getDispatchDriversHandler = async (req, res) => {
               status: {
                 in: ['ASSIGNED', 'ACCEPTED'],
               },
+              // ✅ CRITICAL FIX: Only count assignments where the JOB is actually active
+              job: {
+                status: {
+                  in: ['PENDING', 'ASSIGNED', 'ACCEPTED', 'IN_PROGRESS', 'ARRIVED', 'PICKED_UP'],
+                },
+              },
             },
             orderBy: { assignedAt: 'desc' },
             take: 1,
-            select: { jobId: true },
+            select: { jobId: true, job: { select: { status: true } } },
           },
           location_updates: {
             orderBy: [{ timestamp: 'desc' }, { createdAt: 'desc' }],
@@ -1747,6 +1753,8 @@ router.post('/jobs', authenticateToken, authorizeRoles(...allowedDispatchRoles),
       validationCode,
       requirements,
       paymentIntentId,
+      stops, // Waypoints/stops between pickup and dropoff
+      source, // Job source: DISPATCH, WALKIN, APP, WEB, PHONE
     } = req.body;
 
     const resolvedCompanyIdRaw =
@@ -1963,6 +1971,19 @@ router.post('/jobs', authenticateToken, authorizeRoles(...allowedDispatchRoles),
 
     if (tariffId) {
       combinedRequirements = { ...combinedRequirements, tariffId };
+    }
+
+    // Add stops/waypoints if provided
+    if (stops && Array.isArray(stops) && stops.length > 0) {
+      combinedRequirements = { ...combinedRequirements, stops };
+    }
+
+    // Add source if provided (DISPATCH, WALKIN, APP, WEB, PHONE)
+    if (source) {
+      combinedRequirements = { ...combinedRequirements, source };
+    } else {
+      // Default to DISPATCH for jobs created through dispatch panel
+      combinedRequirements = { ...combinedRequirements, source: 'DISPATCH' };
     }
 
     combinedRequirements = {
