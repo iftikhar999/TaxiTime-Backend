@@ -631,6 +631,28 @@ model driver_preferences {
   zones            zones?   @relation(fields: [selectedZoneId], references: [id])
 }
 
+// Track all driver status changes with source information
+model driver_status_history {
+  id             String   @id @default(uuid())
+  createdAt      DateTime @default(now())
+  driverId       String
+  previousStatus String?
+  newStatus      String
+  source         String // e.g., "MOBILE_APP", "DISPATCH_CONSOLE", "JOB_ASSIGNMENT", "JOB_COMPLETION", "AUTO_BUSY", "SERVER_SYNC"
+  triggeredBy    String? // userId who triggered the change (if applicable)
+  jobId          String? // related jobId if status change is job-related
+  reason         String? // additional context/reason for the change
+  metadata       Json? // any additional data
+  ipAddress      String?
+  userAgent      String?
+
+  users User @relation(fields: [driverId], references: [id], onDelete: Cascade)
+
+  @@index([driverId, createdAt(sort: Desc)])
+  @@index([createdAt(sort: Desc)])
+  @@index([source])
+}
+
 model fare_types {
   id          String   @id
   createdAt   DateTime @default(now())
@@ -1235,6 +1257,7 @@ model User {
   companies_users_companyIdTocompanies                    companies?                  @relation("users_companyIdTocompanies", fields: [companyId], references: [id])
   wallet_transactions                                     wallet_transactions[]
   jobMeterSnapshots                                       job_meter_snapshots[]
+  driver_status_history                                   driver_status_history[]
 
   @@index([currentJobId], map: "users_currentJobId_idx")
   @@map("users")

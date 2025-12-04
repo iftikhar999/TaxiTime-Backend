@@ -1,6 +1,7 @@
 const prisma = require('../lib/prisma');
 const QueueManagementService = require('../services/queueManagementService');
 const jobService = require('../services/jobService');
+const { logStatusChange, STATUS_SOURCES } = require('../services/driverStatusTrackingService');
 
 const NAMESPACES = {
     DISPATCH: '/dispatch',
@@ -326,6 +327,8 @@ const updateDriverDispatchPreferences = async (driverId, queueManager, updater) 
         const nextPreferences = {
             ...preferences,
             dispatch: updatedDispatch,
+            // ✅ CRITICAL FIX: Also set driverStatus at root level for GET /dispatch/drivers
+            driverStatus: updatedDispatch.status || preferences.driverStatus,
         };
 
         await prisma.user.update({
@@ -754,6 +757,13 @@ module.exports = (io, socket, driverId, companyId, queueService) => {
                 return;
             }
 
+            // Get previous status for tracking
+            const driver = await prisma.user.findUnique({
+                where: { id: driverId },
+                select: { preferences: true },
+            });
+            const previousStatus = driver?.preferences?.driverStatus || driver?.preferences?.dispatch?.status || 'UNKNOWN';
+
             const location = payload.location
                 ? {
                     latitude: Number(payload.location.latitude),
@@ -818,6 +828,23 @@ module.exports = (io, socket, driverId, companyId, queueService) => {
                 }
 
                 return nextMeta;
+            });
+
+            // 📝 Track status change from mobile app (outside callback, in async context)
+            await logStatusChange({
+                driverId,
+                previousStatus,
+                newStatus: status,
+                source: STATUS_SOURCES.MOBILE_APP,
+                triggeredBy: driverId,
+                jobId: payload.jobId || null,
+                reason: payload.reason || 'Driver status update from mobile app',
+                metadata: {
+                    eventId,
+                    location: locationMeta,
+                    zone: zoneMeta,
+                    companyId,
+                },
             });
 
             broadcastStatus(statusPayload);
@@ -1350,8 +1377,10 @@ module.exports = (io, socket, driverId, companyId, queueService) => {
                         normalizedStatus
                     )
                 ) {
-                    offerStatusUpdate.status = 'CANCELLED';
-                    offerStatusUpdate.response = normalizedStatus;
+                    // Use REJECTED status since CANCELLED is not in OfferStatus enum
+                    // Valid OfferResponse values are: PENDING, ACCEPTED, REJECTED, TIMEOUT
+                    offerStatusUpdate.status = 'REJECTED';
+                    offerStatusUpdate.response = 'REJECTED'; // Must use valid OfferResponse enum
                 }
 
                 if (Object.keys(offerStatusUpdate).length > 0) {

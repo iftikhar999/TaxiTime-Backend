@@ -954,4 +954,37 @@ router.get('/:id/shift/status', async (req, res) => {
   }
 });
 
+// GET /api/drivers/:id/status-history - Get driver status change history
+router.get('/:id/status-history', authorizeRoles('SUPER_ADMIN', 'OWNER', 'DISPATCHER'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { limit = 50, source } = req.query;
+
+    const where = { driverId: id };
+    if (source) {
+      where.source = source;
+    }
+
+    const history = await prisma.driver_status_history.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      take: parseInt(limit),
+    });
+
+    res.json({
+      success: true,
+      driverId: id,
+      count: history.length,
+      history,
+    });
+  } catch (error) {
+    console.error('Error fetching driver status history:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch status history',
+      details: error.message,
+    });
+  }
+});
+
 module.exports = router;

@@ -26,6 +26,9 @@ const { createPrismaLoggingMiddleware } = require('./middleware/prismaLogger');
 // Import enhanced status handlers
 const enhancedDriverStatusHandlers = require('./socket-handlers/enhancedDriverStatusHandlers');
 
+// Import status tracking service
+const { logStatusChange, STATUS_SOURCES } = require('./services/driverStatusTrackingService');
+
 const JOB_FLOW_V2_ENABLED = String(process.env.FEATURE_JOB_FLOW_V2 || '')
   .toLowerCase() === 'true';
 
@@ -1168,6 +1171,21 @@ driverNamespace.on('connection', (socket) => {
         data: { preferences: updatedPrefs },
       });
 
+      // 📝 Track status change - Job completed & payment collected
+      await logStatusChange({
+        driverId: driverId,
+        previousStatus: 'ON_JOB',
+        newStatus: 'AVAILABLE',
+        source: STATUS_SOURCES.JOB_COMPLETE,
+        triggeredBy: driverId,
+        jobId: data.jobId,
+        reason: 'Job completed and payment collected',
+        metadata: {
+          paymentAmount: data.amount,
+          companyId: socket.companyId,
+        },
+      });
+
       console.log(`✅ Driver ${driverId} set to AVAILABLE after payment collected`);
 
       // 4. Broadcast driver status update to dispatch
@@ -1622,6 +1640,7 @@ driverNamespace.on('connection', (socket) => {
         });
 
         // Update assignment status
+        // Note: assignments table has rejectedAt but not respondedAt
         await prisma.assignments.updateMany({
           where: {
             jobId,
@@ -1629,7 +1648,7 @@ driverNamespace.on('connection', (socket) => {
           },
           data: {
             status: status === 'NO_SHOW' || status === 'NOSHOW' ? 'NOSHOW' : 'RECALLED',
-            respondedAt: timestamp ? new Date(timestamp) : new Date(),
+            rejectedAt: timestamp ? new Date(timestamp) : new Date(),
             updatedAt: new Date(),
           },
         });
@@ -1659,6 +1678,21 @@ driverNamespace.on('connection', (socket) => {
         await prisma.user.update({
           where: { id: effectiveDriverId },
           data: { preferences: updatedPrefsForNoShow },
+        });
+
+        // 📝 Track status change - No-show/Recall
+        await logStatusChange({
+          driverId: effectiveDriverId,
+          previousStatus: 'ON_JOB',
+          newStatus: 'AVAILABLE',
+          source: normalizedStatus === 'NOSHOW' ? STATUS_SOURCES.NO_SHOW : STATUS_SOURCES.JOB_RECALLED,
+          triggeredBy: effectiveDriverId,
+          jobId: jobId,
+          reason: reason || `Job ${normalizedStatus} by driver`,
+          metadata: {
+            companyId: updatedJob.companyId,
+            progressStatus: normalizedStatus,
+          },
         });
 
         console.log(`✅ Job ${jobId} ${status} - returned to UNASSIGNED by driver ${effectiveDriverId} (preferences merged, currentJobId cleared)`);
