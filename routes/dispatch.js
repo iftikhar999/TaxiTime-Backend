@@ -1136,7 +1136,7 @@ const getDispatchDriversHandler = async (req, res) => {
                 in: ['ASSIGNED', 'ACCEPTED'],
               },
               // ✅ CRITICAL FIX: Only count assignments where the JOB is actually active
-              job: {
+              jobs: {
                 status: {
                   in: ['PENDING', 'ASSIGNED', 'ACCEPTED', 'IN_PROGRESS', 'ARRIVED', 'PICKED_UP'],
                 },
@@ -1144,7 +1144,7 @@ const getDispatchDriversHandler = async (req, res) => {
             },
             orderBy: { assignedAt: 'desc' },
             take: 1,
-            select: { jobId: true, job: { select: { status: true } } },
+            select: { jobId: true, jobs: { select: { status: true } } },
           },
           location_updates: {
             orderBy: [{ timestamp: 'desc' }, { createdAt: 'desc' }],
