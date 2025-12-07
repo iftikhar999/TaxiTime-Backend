@@ -861,10 +861,12 @@ const mapJobStatusToCounter = (normalizedStatus) => {
     case 'UNASSIGNED':
     case 'PENDING':
     case 'REQUESTED':
+      return 'unassigned';
     case 'REJECTED':
+      return 'rejected';
     case 'RECALL':
     case 'RECALLED':
-      return 'unassigned';
+      return 'recalled';
     case 'OFFERED':
     case 'SENDING':
     case 'DISPLAYED':
@@ -886,6 +888,9 @@ const mapJobStatusToCounter = (normalizedStatus) => {
     case 'CANCELLED':
     case 'CANCELED':
       return 'cancelled';
+    case 'NOSHOW':
+    case 'NO_SHOW':
+      return 'noShow';
     default:
       return 'unassigned';
   }
