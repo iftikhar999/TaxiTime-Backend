@@ -1419,6 +1419,17 @@ driverNamespace.on('connection', (socket) => {
         .to('super_admin')
         .emit('job:rejected', dispatchPayload);
 
+      // ✅ CRITICAL: Send driver status update to clear currentJobId
+      const driverStatusPayload = {
+        driverId: effectiveDriverId,
+        status: 'AVAILABLE',
+        currentJobId: null,
+        timestamp: new Date().toISOString(),
+      };
+      dispatchNamespace.to(`dispatch_${updatedJob.companyId}`).emit('driver:status:updated', driverStatusPayload);
+      dispatchNamespace.to(`company_${updatedJob.companyId}`).emit('driver:status:updated', driverStatusPayload);
+      dispatchNamespace.to('super_admin').emit('driver:status:updated', driverStatusPayload);
+
       // Confirm to driver
       socket.emit('job:reject:confirmed', {
         success: true,
