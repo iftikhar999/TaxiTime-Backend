@@ -1083,11 +1083,18 @@ const getDispatchDriversHandler = async (req, res) => {
 
     // Fetch ALL active drivers first (we'll filter by company after fetching)
     // because drivers are linked to companies via company_drivers table, not User.companyId
+    // ✅ CRITICAL: Only show drivers with ACTIVE SHIFT (logged in drivers)
     const [allDrivers, zones] = await Promise.all([
       prisma.user.findMany({
         where: {
           role: 'DRIVER',
           isActive: true,
+          // ✅ REQUIRE active shift - driver must have a shift with endTime: null
+          shifts: {
+            some: {
+              endTime: null,
+            },
+          },
           OR: [
             {
               // Only include drivers with preferences that have driverStatus not set to OFFLINE
@@ -1136,9 +1143,10 @@ const getDispatchDriversHandler = async (req, res) => {
                 in: ['ASSIGNED', 'ACCEPTED'],
               },
               // ✅ CRITICAL FIX: Only count assignments where the JOB is actually active
+              // Valid JobStatus values that indicate driver is BUSY with active job
               jobs: {
                 status: {
-                  in: ['PENDING', 'ASSIGNED', 'ACCEPTED', 'IN_PROGRESS', 'ARRIVED', 'PICKED_UP'],
+                  in: ['PENDING', 'ASSIGNED', 'ACCEPTED', 'STARTED', 'IN_PROGRESS', 'ON_THE_WAY', 'ARRIVED', 'ACTIVE', 'REACHED'],
                 },
               },
             },
