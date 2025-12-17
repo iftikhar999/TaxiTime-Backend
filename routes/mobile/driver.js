@@ -143,12 +143,11 @@ router.get('/jobs/nearby', auth, async (req, res) => {
     const driverLng = longitude ? Number.parseFloat(longitude) : null;
     const maxResults = Number.parseInt(limit, 10);
     
-    // Get driver's company and current zone
+    // Get driver's company and preferences (zone is stored in preferences, not as a direct field)
     const driver = await prisma.user.findUnique({
       where: { id: driverId },
       select: { 
         companyId: true, 
-        zoneId: true,
         preferences: true,
       },
     });
@@ -157,9 +156,12 @@ router.get('/jobs/nearby', auth, async (req, res) => {
       return res.status(400).json({ error: 'Driver not associated with a company' });
     }
     
-    // Determine zone to filter by (priority: query param > driver's current zone > driver preferences)
+    // Determine zone to filter by (priority: query param > driver's preferences)
+    // Zone is stored in preferences.dispatch.currentZone.id
     const prefs = driver.preferences || {};
-    const filterZoneId = zoneId || driver.zoneId || prefs.currentZoneId || null;
+    const dispatchPrefs = prefs.dispatch || {};
+    const currentZoneId = dispatchPrefs.currentZone?.id || prefs.currentZoneId || null;
+    const filterZoneId = zoneId || currentZoneId;
     
     console.log(`🔍 [JobQueue] Fetching nearby jobs for driver ${driverId}:`, {
       zoneId: filterZoneId,
@@ -167,7 +169,8 @@ router.get('/jobs/nearby', auth, async (req, res) => {
       lng: driverLng,
     });
     
-    // Build where clause - filter by zone if available
+    // Build where clause - Job model doesn't have zoneId, so we filter by company only
+    // Distance filtering is done client-side or by pickup coordinates
     const whereClause = {
       companyId: driver.companyId,
       status: {
@@ -177,12 +180,10 @@ router.get('/jobs/nearby', auth, async (req, res) => {
       ...(excludeJobId ? { id: { not: excludeJobId } } : {}),
     };
     
-    // Add zone filter if we have a zone ID
-    if (filterZoneId) {
-      whereClause.zoneId = filterZoneId;
-    }
+    // Note: Job model doesn't have zoneId field - jobs are filtered by company
+    // and then distance is calculated client-side
     
-    // Find pending/unassigned jobs for the same company and zone
+    // Find pending/unassigned jobs for the same company
     const pendingJobs = await prisma.job.findMany({
       where: whereClause,
       include: {

@@ -323,46 +323,21 @@ router.get('/', authorizeRoles('SUPER_ADMIN', 'OWNER', 'DISPATCHER'), async (req
       where.isVerified = isVerified === 'true';
     }
 
-    // Get drivers with related data
+    // Get drivers with minimal related data to avoid legacy relation mismatches
     const [drivers, totalCount] = await Promise.all([
       prisma.user.findMany({
         where,
-        include: {
-          company: {
-            select: {
-              id: true,
-              legalName: true,
-              brandName: true,
-              name: true,
-              companyCode: true
-            }
-          },
-          companyDriverProfile: {
-            select: {
-              employeeId: true,
-              hireDate: true,
-              licenseNumber: true,
-              licenseExpiryDate: true,
-              status: true,
-              onboardingStatus: true,
-              emergencyContactName: true,
-              emergencyContactPhone: true
-            }
-          },
-          documents: {
-            select: {
-              id: true,
-              type: true,
-              status: true,
-              uploadedAt: true
-            }
-          },
-          _count: {
-            select: {
-              driverRides: { where: { status: 'COMPLETED' } },
-              shifts: true
-            }
-          }
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          email: true,
+          phone: true,
+          role: true,
+          isActive: true,
+          isVerified: true,
+          companyId: true,
+          createdAt: true
         },
         orderBy: { createdAt: 'desc' },
         skip,
@@ -378,33 +353,10 @@ router.get('/', authorizeRoles('SUPER_ADMIN', 'OWNER', 'DISPATCHER'), async (req
       fullName: `${driver.firstName} ${driver.lastName}`,
       email: driver.email,
       phone: driver.phone,
-      avatar: driver.avatar,
       isActive: driver.isActive,
       isVerified: driver.isVerified,
+      companyId: driver.companyId,
       createdAt: driver.createdAt,
-      updatedAt: driver.updatedAt,
-      company: driver.company ? {
-        id: driver.company.id,
-        name: driver.company.legalName || driver.company.brandName || driver.company.name,
-        companyCode: driver.company.companyCode
-      } : null,
-      profile: driver.companyDriverProfile ? {
-        employmentType: driver.companyDriverProfile.employmentType,
-        hireDate: driver.companyDriverProfile.hireDate,
-        licenseNumber: driver.companyDriverProfile.licenseNumber,
-        licenseExpiry: driver.companyDriverProfile.licenseExpiry,
-        status: driver.companyDriverProfile.status,
-        backgroundCheckStatus: driver.companyDriverProfile.backgroundCheckStatus,
-        panicContact: {
-          name: driver.companyDriverProfile.panicContactName,
-          phone: driver.companyDriverProfile.panicContactPhone
-        }
-      } : null,
-      documents: driver.documents,
-      stats: {
-        completedRides: driver._count.driverRides,
-        totalShifts: driver._count.shifts
-      }
     }));
 
     const totalPages = Math.ceil(totalCount / parseInt(limit));

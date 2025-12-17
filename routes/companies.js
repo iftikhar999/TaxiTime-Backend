@@ -400,6 +400,7 @@ router.post('/', async (req, res) => {
 
       const owner = await prisma.user.create({
         data: {
+          id: createId(),
           firstName: primaryContactName || 'Owner',
           lastName: companyLegalName || 'User',
           email: defaultOwnerEmail,
@@ -408,6 +409,7 @@ router.post('/', async (req, res) => {
           role: 'OWNER',
           isActive: true,
           isVerified: false,
+          updatedAt: new Date(),
         }
       });
       console.log('Owner created with ID:', owner.id);
@@ -419,6 +421,10 @@ router.post('/', async (req, res) => {
     // Create company
     const newCompany = await prisma.companies.create({
       data: {
+        // ID
+        id: createId(),
+        updatedAt: new Date(),
+        
         // Core Identity
         legalName: companyLegalName,
         brandName: companyBrandName || companyLegalName,
@@ -436,11 +442,11 @@ router.post('/', async (req, res) => {
         supportPhone: supportPhone || companyPhone,
 
         // HQ Address
-        hqAddressLine1,
-        hqAddressLine2,
-        hqCity,
-        hqState,
-        hqPostcode,
+        hqAddressLine1: hqAddressLine1 || '',
+        hqAddressLine2: hqAddressLine2 || '',
+        hqCity: hqCity || '',
+        hqState: hqState || '',
+        hqPostcode: hqPostcode || '',
         hqCountry,
 
         // Legacy fields

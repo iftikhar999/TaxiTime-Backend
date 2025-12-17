@@ -1,0 +1,855 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🚀 TaxiTime Debug Dashboard</title>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: 'Monaco', 'Menlo', monospace; 
+            background: #0a0a0f; 
+            color: #e0e0e0;
+            min-height: 100vh;
+        }
+        .header {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            padding: 15px 20px;
+            border-bottom: 2px solid #0f3460;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 { 
+            font-size: 18px; 
+            color: #00d9ff;
+            text-shadow: 0 0 10px #00d9ff50;
+        }
+        .connection-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .status-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #ff4444;
+            animation: pulse 1.5s infinite;
+        }
+        .status-dot.connected { background: #44ff44; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        
+        .main-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr 300px;
+            grid-template-rows: auto 1fr 1fr;
+            gap: 10px;
+            padding: 10px;
+            height: calc(100vh - 70px);
+        }
+        
+        .panel {
+            background: #12121a;
+            border: 1px solid #2a2a3a;
+            border-radius: 8px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .panel-header {
+            background: #1a1a2e;
+            padding: 10px 15px;
+            font-size: 12px;
+            font-weight: bold;
+            color: #888;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #2a2a3a;
+        }
+        .panel-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 10px;
+        }
+        .panel-content::-webkit-scrollbar { width: 6px; }
+        .panel-content::-webkit-scrollbar-track { background: #1a1a2e; }
+        .panel-content::-webkit-scrollbar-thumb { background: #3a3a4a; border-radius: 3px; }
+        
+        /* Control Panel */
+        .controls { grid-column: 1 / -1; }
+        .control-buttons {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            padding: 10px;
+        }
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-family: inherit;
+            font-size: 12px;
+            font-weight: bold;
+            transition: all 0.2s;
+        }
+        .btn:hover { transform: translateY(-2px); }
+        .btn-primary { background: #0066ff; color: white; }
+        .btn-success { background: #00cc66; color: white; }
+        .btn-warning { background: #ff9900; color: black; }
+        .btn-danger { background: #ff3366; color: white; }
+        .btn-chaos { 
+            background: linear-gradient(45deg, #ff0066, #ff6600, #ffcc00, #00ff66, #0066ff, #6600ff);
+            background-size: 300% 300%;
+            animation: chaos-gradient 2s ease infinite;
+            color: white;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+        }
+        @keyframes chaos-gradient {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+        
+        /* Event Log */
+        .event-item {
+            padding: 8px 10px;
+            margin-bottom: 5px;
+            border-radius: 4px;
+            font-size: 11px;
+            border-left: 3px solid;
+            background: #1a1a2a;
+        }
+        .event-item.emit { border-color: #00d9ff; }
+        .event-item.receive { border-color: #44ff44; }
+        .event-item.api { border-color: #ff9900; }
+        .event-item.error { border-color: #ff4444; background: #2a1a1a; }
+        .event-time { color: #666; margin-right: 10px; }
+        .event-name { color: #00d9ff; font-weight: bold; }
+        .event-data { 
+            color: #888; 
+            margin-top: 5px; 
+            white-space: pre-wrap;
+            word-break: break-all;
+            max-height: 100px;
+            overflow: hidden;
+        }
+        .event-item:hover .event-data { max-height: none; }
+        
+        /* Stats Panel */
+        .stat-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px;
+            border-bottom: 1px solid #2a2a3a;
+        }
+        .stat-label { color: #888; }
+        .stat-value { color: #00d9ff; font-weight: bold; }
+        
+        /* Map Panel */
+        .mini-map {
+            width: 100%;
+            height: 200px;
+            background: #1a1a2e;
+            border-radius: 4px;
+            position: relative;
+            overflow: hidden;
+        }
+        .driver-marker {
+            position: absolute;
+            width: 20px;
+            height: 20px;
+            background: #44ff44;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            border: 2px solid white;
+            transition: all 0.3s;
+        }
+        .driver-marker.busy { background: #ff9900; }
+        .driver-marker.offline { background: #666; }
+        
+        /* Job Flow */
+        .job-flow {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        .job-state {
+            padding: 8px 12px;
+            background: #1a1a2e;
+            border-radius: 4px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .job-state.active {
+            background: #0f3460;
+            border: 1px solid #00d9ff;
+        }
+        .state-name { font-weight: bold; }
+        .state-time { color: #666; font-size: 10px; }
+        
+        /* Performance */
+        .perf-bar {
+            height: 20px;
+            background: #1a1a2e;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-bottom: 8px;
+        }
+        .perf-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #00cc66, #ffcc00, #ff3366);
+            transition: width 0.3s;
+        }
+        .perf-label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 10px;
+            color: #888;
+            margin-bottom: 3px;
+        }
+        
+        /* Chaos Controls */
+        .chaos-option {
+            padding: 10px;
+            margin-bottom: 5px;
+            background: #1a1a2e;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .chaos-option:hover { background: #2a2a3e; }
+        .chaos-option.active { 
+            background: #3a1a2e;
+            border: 1px solid #ff3366;
+        }
+        .chaos-title { font-weight: bold; margin-bottom: 3px; }
+        .chaos-desc { font-size: 10px; color: #888; }
+        
+        /* Simulator */
+        .sim-status {
+            padding: 15px;
+            text-align: center;
+            background: #1a1a2e;
+            border-radius: 8px;
+            margin-bottom: 10px;
+        }
+        .sim-status.running {
+            background: #1a3a2e;
+            border: 1px solid #44ff44;
+        }
+        .sim-count { font-size: 24px; font-weight: bold; color: #00d9ff; }
+        
+        .clear-btn {
+            background: transparent;
+            border: 1px solid #3a3a4a;
+            color: #888;
+            padding: 4px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 10px;
+        }
+        .clear-btn:hover { background: #2a2a3a; }
+        
+        .badge {
+            background: #ff3366;
+            color: white;
+            padding: 2px 6px;
+            border-radius: 10px;
+            font-size: 10px;
+            margin-left: 10px;
+        }
+        
+        .input-group {
+            display: flex;
+            gap: 5px;
+            margin-bottom: 10px;
+        }
+        .input-group input, .input-group select {
+            flex: 1;
+            padding: 8px;
+            background: #1a1a2e;
+            border: 1px solid #3a3a4a;
+            border-radius: 4px;
+            color: white;
+            font-family: inherit;
+        }
+        
+        .tabs {
+            display: flex;
+            border-bottom: 1px solid #3a3a4a;
+        }
+        .tab {
+            padding: 8px 16px;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            transition: all 0.2s;
+        }
+        .tab:hover { background: #1a1a2e; }
+        .tab.active { 
+            border-bottom-color: #00d9ff;
+            color: #00d9ff;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🚀 TaxiTime Debug Dashboard</h1>
+        <div class="connection-status">
+            <span id="socketUrl">Not connected</span>
+            <div class="status-dot" id="statusDot"></div>
+        </div>
+    </div>
+    
+    <div class="main-grid">
+        <!-- Control Panel -->
+        <div class="panel controls">
+            <div class="panel-content" style="padding: 10px 15px;">
+                <div class="control-buttons">
+                    <button class="btn btn-primary" onclick="connectSocket()">🔌 Connect Socket</button>
+                    <button class="btn btn-success" onclick="joinRooms()">🏠 Join All Rooms</button>
+                    <button class="btn btn-warning" onclick="testAPIEndpoints()">📡 Test All APIs</button>
+                    <button class="btn btn-danger" onclick="clearAllLogs()">🗑️ Clear Logs</button>
+                    <button class="btn btn-chaos" onclick="toggleChaosMode()">💥 CHAOS MODE</button>
+                    <button class="btn btn-primary" onclick="startSimulator()">🤖 Start Simulator</button>
+                    <button class="btn btn-success" onclick="exportLogs()">📥 Export Logs</button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Socket Events Panel -->
+        <div class="panel">
+            <div class="panel-header">
+                🔌 Socket Events <span class="badge" id="socketCount">0</span>
+                <button class="clear-btn" onclick="clearSocketLogs()">Clear</button>
+            </div>
+            <div class="panel-content" id="socketEvents"></div>
+        </div>
+        
+        <!-- API Calls Panel -->
+        <div class="panel">
+            <div class="panel-header">
+                📡 API Calls <span class="badge" id="apiCount">0</span>
+                <button class="clear-btn" onclick="clearAPILogs()">Clear</button>
+            </div>
+            <div class="panel-content" id="apiEvents"></div>
+        </div>
+        
+        <!-- Stats Panel -->
+        <div class="panel" style="grid-row: 2 / 4;">
+            <div class="panel-header">📊 Live Stats</div>
+            <div class="panel-content">
+                <div class="stat-item">
+                    <span class="stat-label">Socket Events</span>
+                    <span class="stat-value" id="totalSocketEvents">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">API Calls</span>
+                    <span class="stat-value" id="totalAPICalls">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Errors</span>
+                    <span class="stat-value" id="totalErrors" style="color: #ff4444;">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Avg Response</span>
+                    <span class="stat-value" id="avgResponse">0ms</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Active Drivers</span>
+                    <span class="stat-value" id="activeDrivers">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Active Jobs</span>
+                    <span class="stat-value" id="activeJobs">0</span>
+                </div>
+                
+                <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid #3a3a4a;">
+                    <div class="panel-header" style="background: transparent; padding: 0; margin-bottom: 10px;">🎯 Performance</div>
+                    <div class="perf-label"><span>API Speed</span><span id="apiSpeed">--</span></div>
+                    <div class="perf-bar"><div class="perf-fill" id="apiSpeedBar" style="width: 0%"></div></div>
+                    
+                    <div class="perf-label"><span>Socket Latency</span><span id="socketLatency">--</span></div>
+                    <div class="perf-bar"><div class="perf-fill" id="socketLatencyBar" style="width: 0%"></div></div>
+                </div>
+                
+                <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid #3a3a4a;">
+                    <div class="panel-header" style="background: transparent; padding: 0; margin-bottom: 10px;">💥 Chaos Options</div>
+                    <div class="chaos-option" onclick="toggleChaos('disconnect')" id="chaos-disconnect">
+                        <div class="chaos-title">🔌 Random Disconnect</div>
+                        <div class="chaos-desc">Simulate socket drops</div>
+                    </div>
+                    <div class="chaos-option" onclick="toggleChaos('latency')" id="chaos-latency">
+                        <div class="chaos-title">🐌 Add Latency</div>
+                        <div class="chaos-desc">Slow API responses</div>
+                    </div>
+                    <div class="chaos-option" onclick="toggleChaos('gps')" id="chaos-gps">
+                        <div class="chaos-title">📍 GPS Jumps</div>
+                        <div class="chaos-desc">Erratic location updates</div>
+                    </div>
+                    <div class="chaos-option" onclick="toggleChaos('errors')" id="chaos-errors">
+                        <div class="chaos-title">💀 Random Errors</div>
+                        <div class="chaos-desc">Fail random requests</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Job Flow Panel -->
+        <div class="panel">
+            <div class="panel-header">🚕 Job State Machine</div>
+            <div class="panel-content">
+                <div class="job-flow" id="jobFlow">
+                    <div class="job-state" data-state="pending">
+                        <span class="state-name">📋 PENDING</span>
+                        <span class="state-time">--</span>
+                    </div>
+                    <div class="job-state" data-state="assigned">
+                        <span class="state-name">👤 ASSIGNED</span>
+                        <span class="state-time">--</span>
+                    </div>
+                    <div class="job-state" data-state="accepted">
+                        <span class="state-name">✅ ACCEPTED</span>
+                        <span class="state-time">--</span>
+                    </div>
+                    <div class="job-state" data-state="arrived">
+                        <span class="state-name">📍 ARRIVED</span>
+                        <span class="state-time">--</span>
+                    </div>
+                    <div class="job-state" data-state="in_progress">
+                        <span class="state-name">🚗 IN PROGRESS</span>
+                        <span class="state-time">--</span>
+                    </div>
+                    <div class="job-state" data-state="completed">
+                        <span class="state-name">🏁 COMPLETED</span>
+                        <span class="state-time">--</span>
+                    </div>
+                </div>
+                
+                <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid #3a3a4a;">
+                    <div class="panel-header" style="background: transparent; padding: 0; margin-bottom: 10px;">🎮 Quick Actions</div>
+                    <div class="input-group">
+                        <input type="text" id="testJobId" placeholder="Job ID">
+                        <select id="testJobAction">
+                            <option value="accept">Accept</option>
+                            <option value="arrive">Arrive</option>
+                            <option value="start">Start</option>
+                            <option value="complete">Complete</option>
+                            <option value="cancel">Cancel</option>
+                        </select>
+                        <button class="btn btn-primary" onclick="triggerJobAction()">Go</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Simulator Panel -->
+        <div class="panel">
+            <div class="panel-header">🤖 Flow Simulator</div>
+            <div class="panel-content">
+                <div class="sim-status" id="simStatus">
+                    <div class="sim-count" id="simCount">0</div>
+                    <div>Simulated Flows</div>
+                </div>
+                
+                <div class="input-group">
+                    <select id="simScenario">
+                        <option value="full-ride">🚕 Full Ride Flow</option>
+                        <option value="cancel-passenger">❌ Passenger Cancel</option>
+                        <option value="cancel-driver">🚫 Driver Cancel</option>
+                        <option value="timeout">⏱️ Timeout Flow</option>
+                        <option value="reassign">🔄 Reassign Flow</option>
+                    </select>
+                </div>
+                
+                <div class="input-group">
+                    <input type="number" id="simSpeed" value="1000" min="100" step="100">
+                    <span style="padding: 8px; color: #888;">ms delay</span>
+                </div>
+                
+                <button class="btn btn-success" style="width: 100%; margin-bottom: 10px;" onclick="runScenario()">
+                    ▶️ Run Scenario
+                </button>
+                
+                <div id="simLog" style="font-size: 10px; color: #888; max-height: 150px; overflow-y: auto;"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // State
+        let socket = null;
+        let stats = {
+            socketEvents: 0,
+            apiCalls: 0,
+            errors: 0,
+            responseTimes: [],
+            activeDrivers: new Set(),
+            activeJobs: new Set()
+        };
+        let chaosMode = {
+            disconnect: false,
+            latency: false,
+            gps: false,
+            errors: false
+        };
+        let allLogs = [];
+        
+        const API_BASE = 'http://localhost:3000';
+        
+        // Socket Connection
+        function connectSocket() {
+            if (socket) socket.disconnect();
+            
+            socket = io(API_BASE, {
+                transports: ['websocket', 'polling'],
+                reconnection: true
+            });
+            
+            socket.on('connect', () => {
+                document.getElementById('statusDot').classList.add('connected');
+                document.getElementById('socketUrl').textContent = `Connected: ${socket.id}`;
+                logSocket('receive', 'connect', { socketId: socket.id });
+            });
+            
+            socket.on('disconnect', (reason) => {
+                document.getElementById('statusDot').classList.remove('connected');
+                document.getElementById('socketUrl').textContent = 'Disconnected';
+                logSocket('receive', 'disconnect', { reason });
+            });
+            
+            // Listen to ALL events
+            const events = [
+                'job:created', 'job:updated', 'job:assigned', 'job:accepted',
+                'job:arrived', 'job:started', 'job:completed', 'job:cancelled',
+                'driver:location', 'driver:status', 'driver:online', 'driver:offline',
+                'meter:telemetry', 'meter:telemetry:update', 'meter:update',
+                'booking:new', 'booking:update', 'booking:cancel',
+                'dispatch:update', 'zone:update', 'notification',
+                'pong', 'error'
+            ];
+            
+            events.forEach(event => {
+                socket.on(event, (data) => {
+                    logSocket('receive', event, data);
+                    handleSpecialEvent(event, data);
+                });
+            });
+            
+            // Catch-all for any events
+            socket.onAny((event, ...args) => {
+                if (!events.includes(event)) {
+                    logSocket('receive', event, args);
+                }
+            });
+        }
+        
+        function handleSpecialEvent(event, data) {
+            if (event.includes('driver:location')) {
+                stats.activeDrivers.add(data?.driverId || 'unknown');
+                updateStats();
+            }
+            if (event.includes('job:')) {
+                if (data?.jobId) stats.activeJobs.add(data.jobId);
+                updateJobFlow(event, data);
+            }
+            if (event === 'meter:telemetry' || event === 'meter:telemetry:update') {
+                highlightMeterUpdate(data);
+            }
+        }
+        
+        function highlightMeterUpdate(data) {
+            const el = document.createElement('div');
+            el.innerHTML = `<strong>💰 METER UPDATE</strong><br>
+                Fare: $${(data?.currentFare || 0).toFixed(2)}<br>
+                Distance: ${((data?.distanceMeters || 0) / 1000).toFixed(2)} km<br>
+                Time: ${formatSeconds(data?.elapsedSeconds || 0)}`;
+            el.style.cssText = 'position:fixed;top:80px;right:20px;background:#1a3a2e;border:2px solid #44ff44;padding:15px;border-radius:8px;z-index:9999;animation:fadeOut 3s forwards;';
+            document.body.appendChild(el);
+            setTimeout(() => el.remove(), 3000);
+        }
+        
+        function formatSeconds(s) {
+            const m = Math.floor(s / 60);
+            const sec = s % 60;
+            return `${m}:${sec.toString().padStart(2, '0')}`;
+        }
+        
+        function joinRooms() {
+            if (!socket) return alert('Connect socket first!');
+            
+            const rooms = ['dispatch', 'drivers', 'company:1', 'zone:1', 'admin'];
+            rooms.forEach(room => {
+                socket.emit('join', room);
+                logSocket('emit', 'join', { room });
+            });
+        }
+        
+        function logSocket(type, event, data) {
+            stats.socketEvents++;
+            updateStats();
+            
+            const container = document.getElementById('socketEvents');
+            const item = document.createElement('div');
+            item.className = `event-item ${type}`;
+            item.innerHTML = `
+                <span class="event-time">${new Date().toLocaleTimeString()}</span>
+                <span class="event-name">${type === 'emit' ? '📤' : '📥'} ${event}</span>
+                <div class="event-data">${JSON.stringify(data, null, 2)}</div>
+            `;
+            container.insertBefore(item, container.firstChild);
+            
+            allLogs.push({ type: 'socket', direction: type, event, data, time: new Date() });
+            document.getElementById('socketCount').textContent = stats.socketEvents;
+        }
+        
+        // API Testing
+        async function testAPIEndpoints() {
+            const endpoints = [
+                { method: 'GET', path: '/api/v2/health' },
+                { method: 'GET', path: '/api/dispatch/jobs' },
+                { method: 'GET', path: '/api/dispatch/drivers' },
+                { method: 'GET', path: '/api/dispatch/zones' },
+                { method: 'GET', path: '/api/drivers' },
+                { method: 'GET', path: '/api/tariffs' }
+            ];
+            
+            for (const endpoint of endpoints) {
+                await testEndpoint(endpoint.method, endpoint.path);
+            }
+        }
+        
+        async function testEndpoint(method, path) {
+            const start = performance.now();
+            try {
+                const response = await fetch(`${API_BASE}${path}`, { method });
+                const time = Math.round(performance.now() - start);
+                const data = await response.json().catch(() => ({}));
+                
+                logAPI(method, path, response.status, time, data);
+                stats.responseTimes.push(time);
+                
+                if (!response.ok) stats.errors++;
+            } catch (err) {
+                const time = Math.round(performance.now() - start);
+                logAPI(method, path, 'ERROR', time, { error: err.message });
+                stats.errors++;
+            }
+            updateStats();
+        }
+        
+        function logAPI(method, path, status, time, data) {
+            stats.apiCalls++;
+            
+            const container = document.getElementById('apiEvents');
+            const item = document.createElement('div');
+            const isError = status === 'ERROR' || status >= 400;
+            item.className = `event-item api${isError ? ' error' : ''}`;
+            item.innerHTML = `
+                <span class="event-time">${new Date().toLocaleTimeString()}</span>
+                <span class="event-name">${method} ${path}</span>
+                <span style="float:right;color:${isError ? '#ff4444' : '#44ff44'}">${status} (${time}ms)</span>
+                <div class="event-data">${JSON.stringify(data, null, 2).slice(0, 500)}</div>
+            `;
+            container.insertBefore(item, container.firstChild);
+            
+            allLogs.push({ type: 'api', method, path, status, time, data, timestamp: new Date() });
+            document.getElementById('apiCount').textContent = stats.apiCalls;
+        }
+        
+        function updateStats() {
+            document.getElementById('totalSocketEvents').textContent = stats.socketEvents;
+            document.getElementById('totalAPICalls').textContent = stats.apiCalls;
+            document.getElementById('totalErrors').textContent = stats.errors;
+            document.getElementById('activeDrivers').textContent = stats.activeDrivers.size;
+            document.getElementById('activeJobs').textContent = stats.activeJobs.size;
+            
+            if (stats.responseTimes.length > 0) {
+                const avg = Math.round(stats.responseTimes.reduce((a, b) => a + b, 0) / stats.responseTimes.length);
+                document.getElementById('avgResponse').textContent = `${avg}ms`;
+                document.getElementById('apiSpeed').textContent = `${avg}ms`;
+                document.getElementById('apiSpeedBar').style.width = `${Math.min(100, 100 - (avg / 10))}%`;
+            }
+        }
+        
+        function updateJobFlow(event, data) {
+            const stateMap = {
+                'job:created': 'pending',
+                'job:assigned': 'assigned',
+                'job:accepted': 'accepted',
+                'job:arrived': 'arrived',
+                'job:started': 'in_progress',
+                'job:completed': 'completed'
+            };
+            
+            const state = stateMap[event];
+            if (state) {
+                document.querySelectorAll('.job-state').forEach(el => el.classList.remove('active'));
+                const el = document.querySelector(`[data-state="${state}"]`);
+                if (el) {
+                    el.classList.add('active');
+                    el.querySelector('.state-time').textContent = new Date().toLocaleTimeString();
+                }
+            }
+        }
+        
+        // Chaos Mode
+        function toggleChaosMode() {
+            Object.keys(chaosMode).forEach(key => {
+                chaosMode[key] = !chaosMode[key];
+                document.getElementById(`chaos-${key}`).classList.toggle('active', chaosMode[key]);
+            });
+            
+            if (Object.values(chaosMode).some(v => v)) {
+                alert('💥 CHAOS MODE ACTIVATED!\nAll chaos options enabled.');
+            } else {
+                alert('Chaos mode disabled.');
+            }
+        }
+        
+        function toggleChaos(type) {
+            chaosMode[type] = !chaosMode[type];
+            document.getElementById(`chaos-${type}`).classList.toggle('active', chaosMode[type]);
+            
+            if (chaosMode[type] && type === 'disconnect' && socket) {
+                setInterval(() => {
+                    if (chaosMode.disconnect && Math.random() < 0.1) {
+                        socket.disconnect();
+                        setTimeout(() => socket.connect(), 2000);
+                    }
+                }, 5000);
+            }
+        }
+        
+        // Simulator
+        async function runScenario() {
+            const scenario = document.getElementById('simScenario').value;
+            const speed = parseInt(document.getElementById('simSpeed').value);
+            const log = document.getElementById('simLog');
+            
+            document.getElementById('simStatus').classList.add('running');
+            log.innerHTML = '';
+            
+            const simLog = (msg) => {
+                log.innerHTML += `<div>${new Date().toLocaleTimeString()} - ${msg}</div>`;
+                log.scrollTop = log.scrollHeight;
+            };
+            
+            const delay = () => new Promise(r => setTimeout(r, speed));
+            
+            if (scenario === 'full-ride') {
+                simLog('📋 Creating job...');
+                await delay();
+                socket?.emit('job:create', { pickup: 'Test A', dropoff: 'Test B' });
+                
+                simLog('👤 Assigning to driver...');
+                await delay();
+                socket?.emit('job:assign', { jobId: 'sim-1', driverId: 'sim-driver' });
+                
+                simLog('✅ Driver accepting...');
+                await delay();
+                socket?.emit('job:accept', { jobId: 'sim-1' });
+                
+                simLog('📍 Driver arrived...');
+                await delay();
+                socket?.emit('job:arrived', { jobId: 'sim-1' });
+                
+                simLog('🚗 Starting ride...');
+                await delay();
+                socket?.emit('job:start', { jobId: 'sim-1' });
+                
+                simLog('🏁 Completing ride...');
+                await delay();
+                socket?.emit('job:complete', { jobId: 'sim-1', fare: 25.50 });
+                
+                simLog('✨ Flow complete!');
+            }
+            
+            document.getElementById('simCount').textContent = parseInt(document.getElementById('simCount').textContent) + 1;
+            document.getElementById('simStatus').classList.remove('running');
+        }
+        
+        function startSimulator() {
+            runScenario();
+        }
+        
+        // Quick Actions
+        function triggerJobAction() {
+            const jobId = document.getElementById('testJobId').value;
+            const action = document.getElementById('testJobAction').value;
+            
+            if (!jobId) return alert('Enter a Job ID');
+            if (!socket) return alert('Connect socket first!');
+            
+            const eventMap = {
+                accept: 'job:accept',
+                arrive: 'job:arrived',
+                start: 'job:start',
+                complete: 'job:complete',
+                cancel: 'job:cancel'
+            };
+            
+            socket.emit(eventMap[action], { jobId });
+            logSocket('emit', eventMap[action], { jobId });
+        }
+        
+        // Utilities
+        function clearSocketLogs() {
+            document.getElementById('socketEvents').innerHTML = '';
+            stats.socketEvents = 0;
+            document.getElementById('socketCount').textContent = '0';
+        }
+        
+        function clearAPILogs() {
+            document.getElementById('apiEvents').innerHTML = '';
+            stats.apiCalls = 0;
+            document.getElementById('apiCount').textContent = '0';
+        }
+        
+        function clearAllLogs() {
+            clearSocketLogs();
+            clearAPILogs();
+            stats = { socketEvents: 0, apiCalls: 0, errors: 0, responseTimes: [], activeDrivers: new Set(), activeJobs: new Set() };
+            allLogs = [];
+            updateStats();
+        }
+        
+        function exportLogs() {
+            const blob = new Blob([JSON.stringify(allLogs, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `taxitime-debug-${new Date().toISOString()}.json`;
+            a.click();
+        }
+        
+        // Auto-connect on load
+        window.onload = () => {
+            connectSocket();
+            // Ping for latency measurement
+            setInterval(() => {
+                if (socket?.connected) {
+                    const start = Date.now();
+                    socket.emit('ping');
+                    socket.once('pong', () => {
+                        const latency = Date.now() - start;
+                        document.getElementById('socketLatency').textContent = `${latency}ms`;
+                        document.getElementById('socketLatencyBar').style.width = `${Math.max(0, 100 - latency)}%`;
+                    });
+                }
+            }, 5000);
+        };
+        
+        // Add CSS animation
+        const style = document.createElement('style');
+        style.textContent = `@keyframes fadeOut { from { opacity: 1; } to { opacity: 0; } }`;
+        document.head.appendChild(style);
+    </script>
+</body>
+</html>

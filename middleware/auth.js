@@ -61,11 +61,13 @@ const authorize = (...roles) => {
 const authenticateToken = auth;
 const authorizeRoles = authorize;
 const requireRole = authorize; // Alias for requireRole(['SUPER_ADMIN']) syntax
+const authMiddleware = auth; // naming alias for v2 routes
 
 module.exports = {
   auth,
   authorize,
   authenticateToken,
   authorizeRoles,
-  requireRole
+  requireRole,
+  authMiddleware,
 };

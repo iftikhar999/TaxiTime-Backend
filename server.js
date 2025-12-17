@@ -8,6 +8,9 @@ const rateLimit = require('express-rate-limit');
 const { createServer } = require('http');
 const { Server } = require('socket.io');
 require('dotenv').config();
+const featureFlags = require('./shared/featureFlags');
+const { isEnabled } = featureFlags;
+const eventBus = require('./services/v2/eventBus');
 
 // IMPORTANT: Initialize logger FIRST to override console methods globally
 const logger = require('./utils/logger');
@@ -40,6 +43,7 @@ const io = new Server(server, {
     credentials: true
   }
 });
+eventBus.setSocketIO(io);
 
 // Initialize services
 const trackingService = new TrackingService(io);
@@ -78,12 +82,17 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 // ===== PERFORMANCE LOGGING MIDDLEWARE =====
 app.use(performanceLoggerMiddleware);
 console.log('📊 Performance logging enabled - API calls & DB queries will be tracked');
+console.log('🧭 Feature flags:', featureFlags);
 
 // Static assets (e.g. uploaded documents)
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Serve vehicle icons
 app.use('/shared/assets/vehicle-icons', express.static(path.join(__dirname, 'shared/assets/vehicle-icons')));
+
+// Serve debug dashboard and public files
+app.use('/debug', express.static(path.join(__dirname, 'public')));
+console.log('🔧 Debug dashboard available at /debug/debug-dashboard.html');
 
 // Store Socket.IO instance in app for easy access
 app.set('io', io);
@@ -98,11 +107,29 @@ app.use((req, res, next) => {
   req.autoDispatchService = autoDispatchService;
   req.queueManagementService = queueManagementService;
   req.earningsService = earningsService;
+  req.features = featureFlags;
   next();
 });
 // Also make services available via app.locals for route files
 app.locals.autoDispatchService = autoDispatchService;
 app.locals.queueManagementService = queueManagementService;
+app.locals.features = featureFlags;
+
+// Conditionally register V2 routes
+if (isEnabled('FEATURE_V2_SERVICES')) {
+  try {
+    const v2Routes = require('./routes/v2');
+    app.use('/api/v2', v2Routes);
+    console.log('✅ V2 routes enabled');
+  } catch (err) {
+    console.error('❌ Failed to load V2 routes:', err);
+  }
+} else {
+  app.use('/api/v2', (req, res) => {
+    res.status(404).json({ code: 'V2_DISABLED', message: 'V2 API is not enabled' });
+  });
+  console.log('ℹ️ V2 routes disabled (FEATURE_V2_SERVICES=false)');
+}
 
 // Database connection
 async function connectDatabase() {
@@ -1629,6 +1656,64 @@ driverNamespace.on('connection', (socket) => {
           status: 'COMPLETED',
         });
 
+        // ✅ Check for pending kick after job completion
+        try {
+          const driverForKick = await prisma.driver.findUnique({
+            where: { id: effectiveDriverId },
+            select: { id: true, preferences: true, name: true }
+          });
+          
+          if (driverForKick?.preferences?.pendingKick) {
+            const pendingKick = driverForKick.preferences.pendingKick;
+            console.log(`🚨 Executing pending kick for driver ${effectiveDriverId} after job completion`);
+            
+            // Update driver to offline and clear pending kick
+            const updatedPrefs = { ...(driverForKick.preferences || {}) };
+            delete updatedPrefs.pendingKick;
+            
+            await prisma.driver.update({
+              where: { id: effectiveDriverId },
+              data: {
+                status: 'OFFLINE',
+                preferences: updatedPrefs
+              }
+            });
+            
+            // Emit kick event to driver
+            if (global.driverNamespace) {
+              global.driverNamespace.emit(`driver:kicked:${effectiveDriverId}`, {
+                reason: pendingKick.reason || 'Kicked by dispatcher',
+                kickedBy: pendingKick.kickedBy,
+                timestamp: new Date().toISOString(),
+                message: 'Your session has been terminated by dispatch'
+              });
+            }
+            
+            // Notify dispatch that kick was executed
+            const kickExecutedPayload = {
+              driverId: effectiveDriverId,
+              driverName: driverForKick.name,
+              status: 'OFFLINE',
+              reason: pendingKick.reason,
+              executedAfterJobId: jobId,
+              timestamp: new Date().toISOString()
+            };
+            
+            rooms.forEach((room) => {
+              dispatchNamespace.to(room).emit('driver:kicked', kickExecutedPayload);
+              dispatchNamespace.to(room).emit('driver:status:updated', {
+                driverId: effectiveDriverId,
+                status: 'OFFLINE',
+                timestamp: new Date().toISOString()
+              });
+            });
+            
+            console.log(`✅ Pending kick executed for driver ${effectiveDriverId}`);
+          }
+        } catch (kickError) {
+          console.error(`❌ Error executing pending kick for driver ${effectiveDriverId}:`, kickError.message);
+        }
+
         return; // ✅ Exit early after handling COMPLETED
       }
 
@@ -2126,6 +2211,18 @@ driverNamespace.on('connection', (socket) => {
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
 
+  // Debug dashboard support - ping/pong for latency measurement
+  socket.on('ping', () => {
+    socket.emit('pong');
+  });
+
+  // Debug dashboard - join room
+  socket.on('join', (room) => {
+    socket.join(room);
+    console.log(`🔧 Debug: ${socket.id} joined room: ${room}`);
+    socket.emit('joined', { room, socketId: socket.id });
+  });
+
   // Legacy handlers for backward compatibility
   socket.on('join-room', (room) => {
     socket.join(room);
@@ -2455,6 +2552,8 @@ app.use('/api/admin', require('./routes/admin-settings')); // Mount /system/info
 app.use('/api/admin/master-data', require('./routes/master-data'));
 app.use('/api/admin/subscription-plans', require('./routes/admin-subscription-plans'));
 app.use('/api/admin/billing', require('./routes/admin-billing'));
+app.use('/api/admin/payments', require('./routes/admin-payments')); // Admin payment management
+app.use('/api/admin/company-payments', require('./routes/admin-company-payments')); // Company payment clearance & blocking
 app.use('/api/reports', require('./routes/reports'));
 
 // ===== PERFORMANCE CONFIGURATION & ANALYSIS (Super Admin) =====

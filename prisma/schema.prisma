@@ -18,6 +18,7 @@ model alarms {
   description    String
   driverId       String?
   jobId          String?
+  serviceType    ServiceType?
   location       Json?
   status         AlarmStatus   @default(ACTIVE)
   acknowledgedAt DateTime?
@@ -39,6 +40,7 @@ model assignments {
   assignedBy      String
   assignedAt      DateTime         @default(now())
   status          AssignmentStatus @default(ASSIGNED)
+  serviceType     ServiceType      @default(TAXI)
   acceptedAt      DateTime?
   rejectedAt      DateTime?
   rejectionReason String?
@@ -46,6 +48,7 @@ model assignments {
   jobs            Job              @relation(fields: [jobId], references: [id])
 
   @@unique([jobId, driverId], name: "jobId_driverId")
+  @@index([driverId, serviceType, status])
 }
 
 model billing_records {
@@ -118,6 +121,8 @@ model companies {
   permitNumber                     String?
   permitExpiryDate                 DateTime?
   serviceModes                     Json?
+  defaultServiceType               ServiceType?
+  serviceModeVersion               Int                         @default(1)
   operatingHoursJson               Json?
   holidayCalendarJson              Json?
   dispatchMode                     String                      @default("AUTO")
@@ -224,6 +229,8 @@ model companies {
   vehicles                         vehicles[]
   zones                            zones[]
   jobMeterSnapshots                job_meter_snapshots[]
+  company_services                 company_services[]
+  service_pricing_profiles         service_pricing_profiles[]
 }
 
 model company_configurations {
@@ -442,6 +449,74 @@ model company_zones {
   @@index([zoneType])
 }
 
+model company_services {
+  id                 String         @id @default(cuid())
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @default(now())
+  companyId          String
+  serviceType        ServiceType
+  enabled            Boolean        @default(false)
+  pricingProfileId   String?
+  autoDispatch       Boolean        @default(false)
+  maxParallelOffers  Int            @default(3)
+  slaSeconds         Int            @default(300)
+  dispatchRadiusKm   Float?
+  operatingHoursJson Json?
+  geoFenceJson       Json?
+  metadata           Json?
+  companies          companies      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  service_pricing_profiles service_pricing_profiles? @relation(fields: [pricingProfileId], references: [id])
+
+  @@unique([companyId, serviceType])
+  @@index([companyId])
+}
+
+model service_pricing_profiles {
+  id                      String                   @id @default(cuid())
+  createdAt               DateTime                 @default(now())
+  updatedAt               DateTime                 @default(now())
+  companyId               String
+  serviceType             ServiceType
+  name                    String
+  baseFare                Decimal                  @db.Decimal(10, 2)
+  perKm                   Decimal                  @db.Decimal(10, 2)
+  perMinute               Decimal                  @db.Decimal(10, 2)
+  minFare                 Decimal                  @db.Decimal(10, 2)
+  pickupFee               Decimal?                 @db.Decimal(10, 2)
+  dropoffFee              Decimal?                 @db.Decimal(10, 2)
+  stopFee                 Decimal?                 @db.Decimal(10, 2)
+  waitingPerMin           Decimal?                 @db.Decimal(10, 2)
+  surgeJson               Json?
+  taxRate                 Decimal                  @db.Decimal(5, 2)
+  currency                String
+  active                  Boolean                  @default(true)
+  metadata                Json?
+  companies               companies                @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  company_services        company_services[]
+  service_pricing_rules   service_pricing_rules[]
+  jobs                    Job[]
+
+  @@index([companyId, serviceType, active])
+}
+
+model service_pricing_rules {
+  id                      String                   @id @default(cuid())
+  createdAt               DateTime                 @default(now())
+  updatedAt               DateTime                 @default(now())
+  pricingProfileId        String
+  zoneId                  String?
+  vehicleType             VehicleType?
+  timeWindowJson          Json?
+  multiplier              Float?
+  flatAdjustment          Decimal?                 @db.Decimal(10, 2)
+  metadata                Json?
+  service_pricing_profiles service_pricing_profiles @relation(fields: [pricingProfileId], references: [id], onDelete: Cascade)
+  zones                   zones?                   @relation(fields: [zoneId], references: [id])
+
+  @@index([pricingProfileId])
+  @@index([zoneId])
+}
+
 model countries {
   id             String           @id
   createdAt      DateTime         @default(now())
@@ -480,9 +555,20 @@ model delivery_orders {
   pickupLocation   Json
   dropoffLocation  Json
   items            Json
+  itemsStructured  Json?
   totalAmount      Decimal        @db.Decimal(10, 2)
   deliveryFee      Decimal        @db.Decimal(10, 2)
   status           DeliveryStatus @default(CREATED)
+  merchantStatus   MerchantOrderStatus?
+  pickupWindowStart DateTime?
+  pickupWindowEnd   DateTime?
+  dropoffWindowStart DateTime?
+  dropoffWindowEnd   DateTime?
+  failReason       String?
+  attemptCount     Int            @default(0)
+  priority         Int?
+  instructions     String?
+  tipAmount        Decimal?       @db.Decimal(10, 2)
   confirmedAt      DateTime?
   readyForPickupAt DateTime?
   pickedUpAt       DateTime?
@@ -538,6 +624,7 @@ model driver_earnings {
   jobId             String?
   paymentId         String?
   shiftId           String?
+  serviceType       ServiceType? @default(TAXI)
   amount            Decimal   @db.Decimal(10, 2)
   currency          String    @default("NZD")
   paymentMethod     String
@@ -572,6 +659,7 @@ model driver_earnings {
   @@index([earnedAt(sort: Desc)])
   @@index([jobId])
   @@index([paymentMethod])
+  @@index([serviceType, earnedAt(sort: Desc)])
 }
 
 model driver_earnings_summaries {
@@ -711,9 +799,12 @@ model Job {
   updatedAt                          DateTime
   companyId                          String
   type                               JobType               @default(TAXI)
+  serviceType                        ServiceType           @default(TAXI)
   status                             JobStatus             @default(PENDING)
+  channel                            JobChannel            @default(DISPATCH)
   tripId                             String?
   deliveryOrderId                    String?
+  pricingProfileId                   String?
   priority                           Int                   @default(0)
   scheduledAt                        DateTime?
   estimatedDuration                  Int?
@@ -722,9 +813,17 @@ model Job {
   pickupAddress                      String?
   pickupLatitude                     Float?
   pickupLongitude                    Float?
+  pickupContactName                  String?
+  pickupContactPhone                 String?
+  pickupWindowStart                  DateTime?
+  pickupWindowEnd                    DateTime?
   dropoffAddress                     String?
   dropoffLatitude                    Float?
   dropoffLongitude                   Float?
+  dropoffContactName                 String?
+  dropoffContactPhone                String?
+  dropoffWindowStart                 DateTime?
+  dropoffWindowEnd                   DateTime?
   estimatedPrice                     Float?
   estimatedDistance                  Float?
   estimatedArrival                   DateTime?
@@ -733,11 +832,20 @@ model Job {
   assignedDriverId                   String?
   requirements                       Json?
   instructions                       String?
+  deliveryType                       DeliveryType?
+  tipAmount                          Decimal?              @db.Decimal(10, 2)
   actualFare                         Decimal?              @db.Decimal(10, 2)
   finalAmount                        Decimal?              @db.Decimal(10, 2)
   actualDistanceKm                   Float?
   actualDurationSeconds              Int?
   startedAt                          DateTime?
+  stopCount                          Int                   @default(0)
+  proofRequired                      Boolean               @default(false)
+  podType                            ProofType?
+  returnToSender                     Boolean               @default(false)
+  tags                               String[]
+  serviceMetadata                    Json?
+  channelMetadata                    Json?
   alarms                             alarms[]
   assignments                        assignments[]
   driver_earnings                    driver_earnings[]
@@ -747,14 +855,124 @@ model Job {
   delivery_orders                    delivery_orders?      @relation(fields: [deliveryOrderId], references: [id])
   rides                              rides?                @relation(fields: [tripId], references: [id])
   location_updates                   LocationUpdate[]
+  job_stops                          job_stops[]
   job_meter_snapshots                job_meter_snapshots[]
+  job_stop_proofs                    job_stop_proofs[]
+  job_events                         job_events[]
   messages                           messages[]
   offers                             offers[]
   payments                           payments[]
   userCurrentJobs                    User[]                @relation("user_current_job")
+  courier_routes                     courier_routes?       @relation("JobRoute")
+  service_pricing_profiles           service_pricing_profiles? @relation(fields: [pricingProfileId], references: [id])
 
   @@index([assignedDriverId, updatedAt])
+  @@index([serviceType, status])
+  @@index([channel, createdAt(sort: Desc)])
   @@map("jobs")
+}
+
+model job_stops {
+  id             String             @id @default(cuid())
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @default(now())
+  jobId          String
+  sequence       Int
+  type           CourierStopType
+  status         CourierStopStatus
+  address        String
+  latitude       Float
+  longitude      Float
+  contactName    String?
+  contactPhone   String?
+  notes          String?
+  eta            DateTime?
+  arrivedAt      DateTime?
+  completedAt    DateTime?
+  proofRequired  Boolean            @default(false)
+  proofType      ProofType?
+  pincode        String?
+  instructions   String?
+  metadata       Json?
+  jobs           Job                @relation(fields: [jobId], references: [id])
+  job_stop_items job_stop_items[]
+  job_stop_proofs job_stop_proofs[]
+  job_events     job_events[]       @relation("JobStopEvents")
+  courier_routes courier_routes[]   @relation("routeStops")
+  returnRoute    courier_routes?    @relation("returnStop")
+
+  @@index([jobId, sequence])
+  @@index([jobId, status])
+}
+
+model job_stop_items {
+  id               String    @id @default(cuid())
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @default(now())
+  stopId           String
+  name             String
+  qty              Int
+  weightGrams      Int?
+  volumeCubicCm    Int?
+  price            Decimal?  @db.Decimal(10, 2)
+  metadata         Json?
+  job_stops        job_stops @relation(fields: [stopId], references: [id], onDelete: Cascade)
+}
+
+model job_stop_proofs {
+  id                   String               @id @default(cuid())
+  createdAt            DateTime             @default(now())
+  jobId                String
+  stopId               String
+  driverId             String
+  type                 ProofType
+  photoUrls            String[]
+  signatureUrl         String?
+  note                 String?
+  recipientName        String?
+  capturedAt           DateTime
+  verificationResult   PodVerificationResult?
+  metadata             Json?
+  jobs                 Job                 @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  job_stops            job_stops           @relation(fields: [stopId], references: [id], onDelete: Cascade)
+  users                User                @relation(fields: [driverId], references: [id], onDelete: Cascade)
+}
+
+model courier_routes {
+  id                 String                  @id @default(cuid())
+  createdAt          DateTime                @default(now())
+  updatedAt          DateTime                @default(now())
+  jobId              String                  @unique
+  totalStops         Int                     @default(0)
+  completedStops     Int                     @default(0)
+  returnRequired     Boolean                 @default(false)
+  returnStopId       String?                 @unique
+  routeOptimized     Boolean                 @default(false)
+  optimizationStatus RouteOptimizationStatus @default(NOT_REQUESTED)
+  routePlanJson      Json?
+  metadata           Json?
+  jobs               Job                     @relation("JobRoute", fields: [jobId], references: [id], onDelete: Cascade)
+  job_stops          job_stops[]             @relation("routeStops")
+  job_stops_return   job_stops?              @relation("returnStop", fields: [returnStopId], references: [id])
+}
+
+model job_events {
+  id         String     @id @default(cuid())
+  createdAt  DateTime   @default(now())
+  jobId      String
+  stopId     String?
+  actorId    String?
+  actorRole  String?
+  event      String
+  fromStatus String?
+  toStatus   String
+  data       Json?
+  jobs       Job        @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  job_stops  job_stops? @relation("JobStopEvents", fields: [stopId], references: [id])
+  users      User?      @relation(fields: [actorId], references: [id])
+
+  @@index([jobId, createdAt])
+  @@index([stopId, createdAt])
 }
 
 model LocationUpdate {
@@ -772,6 +990,7 @@ model LocationUpdate {
   batteryLevel Int?
   networkType  String?
   timestamp    DateTime?
+  serviceType  ServiceType?
   users        User      @relation(fields: [driverId], references: [id])
   jobs         Job?      @relation(fields: [jobId], references: [id])
   rides        rides?    @relation(fields: [tripId], references: [id])
@@ -815,21 +1034,146 @@ model merchants {
   email           String            @unique
   phone           String
   address         Json
+  latitude        Float?
+  longitude       Float?
   logo            String?
+  coverImage      String?
   description     String?
   companyId       String
+  type            MerchantType?
   businessType    String
   cuisine         String[]
   priceRange      String?
   rating          Float?            @default(0)
   ratingCount     Int?              @default(0)
+  avgPrepTimeMinutes Int?           @default(15)
+  minOrderAmount  Decimal?          @db.Decimal(10, 2)
   isActive        Boolean           @default(true)
   isOpen          Boolean           @default(false)
   operatingHours  Json?
   menu            Json?
   commissionRate  Decimal           @default(15.00) @db.Decimal(5, 2)
+  autoAcceptOrders Boolean          @default(false)
+  bankDetailsEncrypted String?
+  contactName     String?
+  contactPhone    String?
+  contactEmail    String?
+  tags            String[]
+  metadata        Json?
   delivery_orders delivery_orders[]
+  merchant_users  merchant_users[]
+  menu_categories menu_categories[]
+  menu_items      menu_items[]
+  merchant_zones  merchant_zones[]
+  merchant_operating_exceptions merchant_operating_exceptions[]
   companies       companies         @relation(fields: [companyId], references: [id])
+
+  @@index([companyId])
+  @@index([companyId, isActive])
+  @@index([latitude, longitude])
+}
+
+model merchant_users {
+  id           String           @id @default(cuid())
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @default(now())
+  merchantId   String
+  userId       String
+  role         MerchantUserRole
+  permissions  Json?
+  isActive     Boolean          @default(true)
+  merchants    merchants        @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  users        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([merchantId])
+  @@index([userId])
+  @@unique([merchantId, userId])
+}
+
+model menu_categories {
+  id           String     @id @default(cuid())
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @default(now())
+  merchantId   String
+  name         String
+  description  String?
+  imageUrl     String?
+  sequence     Int
+  isActive     Boolean    @default(true)
+  availableFrom String?
+  availableTo   String?
+  merchants    merchants  @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  menu_items   menu_items[]
+
+  @@index([merchantId])
+  @@index([merchantId, sequence])
+}
+
+model menu_items {
+  id                String          @id @default(cuid())
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @default(now())
+  categoryId        String
+  merchantId        String
+  name              String
+  description       String?
+  price             Decimal         @db.Decimal(10, 2)
+  discountPrice     Decimal?        @db.Decimal(10, 2)
+  discountValidUntil DateTime?
+  imageUrl          String?
+  prepTimeMinutes   Int?
+  isAvailable       Boolean         @default(true)
+  isPopular         Boolean         @default(false)
+  isFeatured        Boolean         @default(false)
+  modifiersJson     Json?
+  tags              String[]
+  allergens         String[]
+  calories          Int?
+  nutritionJson     Json?
+  maxQuantity       Int             @default(99)
+  minQuantity       Int             @default(1)
+  metadata          Json?
+  menu_categories   menu_categories @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  merchants         merchants       @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  @@index([categoryId])
+  @@index([merchantId])
+  @@index([merchantId, isAvailable])
+}
+
+model merchant_zones {
+  id                     String     @id @default(cuid())
+  createdAt              DateTime   @default(now())
+  updatedAt              DateTime   @default(now())
+  merchantId             String
+  zoneId                 String
+  deliveryFee            Decimal    @db.Decimal(10, 2)
+  minOrderAmount         Decimal    @db.Decimal(10, 2)
+  maxDeliveryRadiusKm    Float?
+  estimatedDeliveryMinutes Int?
+  isActive               Boolean    @default(true)
+  priorityOrder          Int        @default(0)
+  metadata               Json?
+  merchants              merchants  @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  zones                  zones      @relation(fields: [zoneId], references: [id], onDelete: Cascade)
+
+  @@index([merchantId])
+  @@index([zoneId])
+  @@unique([merchantId, zoneId])
+}
+
+model merchant_operating_exceptions {
+  id         String    @id @default(cuid())
+  createdAt  DateTime  @default(now())
+  merchantId String
+  date       DateTime
+  isClosed   Boolean
+  openTime   String?
+  closeTime  String?
+  reason     String?
+  merchants  merchants @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  @@index([merchantId, date])
 }
 
 model messages {
@@ -844,6 +1188,7 @@ model messages {
   isRead                           Boolean     @default(false)
   readAt                           DateTime?
   isEdited                         Boolean     @default(false)
+  serviceType                      ServiceType?
   jobs                             Job?        @relation(fields: [jobId], references: [id])
   users_messages_receiverIdTousers User?       @relation("messages_receiverIdTousers", fields: [receiverId], references: [id])
   users_messages_senderIdTousers   User        @relation("messages_senderIdTousers", fields: [senderId], references: [id])
@@ -875,12 +1220,15 @@ model offers {
   estimatedDuration Int
   distanceToPickup  Float
   status            OfferStatus    @default(SENT)
+  serviceType       ServiceType    @default(TAXI)
   expiresAt         DateTime
   respondedAt       DateTime?
   response          OfferResponse?
   declineReason     String?
   users             User           @relation(fields: [driverId], references: [id])
   jobs              Job            @relation(fields: [jobId], references: [id])
+
+  @@index([driverId, serviceType, status])
 }
 
 model payments {
@@ -890,6 +1238,7 @@ model payments {
   companyId                        String
   tripId                           String?
   deliveryOrderId                  String?
+  serviceType                      ServiceType?          @default(TAXI)
   customerId                       String
   amount                           Decimal               @db.Decimal(10, 2)
   currency                         String                @default("USD")
@@ -928,6 +1277,7 @@ model payments {
 
   @@index([driverId, paidAt])
   @@index([jobId])
+  @@index([serviceType, createdAt])
 }
 
 model payouts {
@@ -1035,6 +1385,7 @@ model rides {
   vehicleId                      String?
   companyId                      String
   rideType                       RideType          @default(TAXI)
+  serviceType                    ServiceType?      @default(TAXI)
   pickup                         Json
   destination                    Json
   stops                          Json?
@@ -1077,6 +1428,8 @@ model rides {
   tariffs                        tariffs?          @relation(fields: [tariffId], references: [id])
   vehicles                       vehicles?         @relation(fields: [vehicleId], references: [id])
   support_tickets                support_tickets[]
+
+  @@index([serviceType, status])
 }
 
 model service_cities {
@@ -1258,6 +1611,9 @@ model User {
   wallet_transactions                                     wallet_transactions[]
   jobMeterSnapshots                                       job_meter_snapshots[]
   driver_status_history                                   driver_status_history[]
+  job_stop_proofs                                         job_stop_proofs[]
+  job_events                                              job_events[]
+  merchant_users                                          merchant_users[]
 
   @@index([currentJobId], map: "users_currentJobId_idx")
   @@map("users")
@@ -1307,6 +1663,12 @@ model vehicles {
   driverId        String?
   capacity        Int             @default(4)
   features        Json?
+  supportsTaxi    Boolean         @default(true)
+  supportsDelivery Boolean        @default(false)
+  supportsCourier Boolean         @default(false)
+  cargoVolumeCubicCm Int?
+  maxLoadKg       Float?
+  coldChain       Boolean         @default(false)
   isActive        Boolean         @default(true)
   isAvailable     Boolean         @default(true)
   insurance       Json?
@@ -1368,6 +1730,8 @@ model zones {
   driver_preferences driver_preferences[]
   vehicle_zones      vehicle_zones[]
   zone_tariffs       zone_tariffs[]
+  service_pricing_rules service_pricing_rules[]
+  merchant_zones     merchant_zones[]
   companies          companies            @relation(fields: [companyId], references: [id])
 }
 
@@ -1502,6 +1866,82 @@ enum JobType {
   TAXI
   DELIVERY
   COURIER
+}
+
+enum ServiceType {
+  TAXI
+  DELIVERY
+  COURIER
+}
+
+enum CourierStopType {
+  PICKUP
+  DROPOFF
+  RETURN
+}
+
+enum CourierStopStatus {
+  PENDING
+  READY
+  ARRIVED
+  PICKED_UP
+  IN_TRANSIT
+  DELIVERED
+  FAILED
+  CANCELLED
+}
+
+enum ProofType {
+  PHOTO
+  SIGNATURE
+  PIN
+  CODE
+  NOTE
+}
+
+enum JobChannel {
+  DISPATCH
+  PASSENGER_APP
+  OWNER_API
+  SCHEDULED
+  WEB_WIDGET
+}
+
+enum RouteOptimizationStatus {
+  NOT_REQUESTED
+  REQUESTED
+  OPTIMIZED
+  FAILED
+}
+
+enum PodVerificationResult {
+  PENDING
+  ACCEPTED
+  REJECTED
+}
+
+enum MerchantType {
+  RESTAURANT
+  GROCERY
+  PHARMACY
+  STORE
+  OTHER
+}
+
+enum MerchantUserRole {
+  MERCHANT_OWNER
+  MERCHANT_MANAGER
+  MERCHANT_STAFF
+}
+
+enum MerchantOrderStatus {
+  PENDING_MERCHANT
+  ACCEPTED
+  PREPARING
+  READY_FOR_PICKUP
+  PICKED_UP
+  CANCELLED_BY_MERCHANT
+  CANCELLED_BY_CUSTOMER
 }
 
 enum KycStatus {

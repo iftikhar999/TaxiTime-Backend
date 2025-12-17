@@ -580,6 +580,58 @@ router.post('/end', authenticateToken, async (req, res) => {
 
         console.log(`Driver shift ended: ${userId} - Shift ID: ${activeShift.id} - Duration: ${shiftDuration}min`);
 
+        // ✅ CRITICAL FIX: Clear vehicle and tariff selections on shift end
+        // This forces driver to select vehicle & tariff again on next login
+        try {
+            // 1️⃣ Clear driver_preferences table (selectedTariffId, selectedZoneId)
+            await prisma.driver_preferences.updateMany({
+                where: { driverId: userId },
+                data: {
+                    selectedTariffId: null,
+                    selectedZoneId: null,
+                    updatedAt: new Date()
+                }
+            });
+            console.log(`🗑️ Cleared driver_preferences for driver ${userId}`);
+
+            // 2️⃣ Clear user.preferences JSON field (selectedVehicleId, selectedTariffId)
+            const currentUser = await prisma.user.findUnique({
+                where: { id: userId },
+                select: { preferences: true }
+            });
+
+            if (currentUser?.preferences) {
+                const updatedPrefs = { ...currentUser.preferences };
+                // Clear vehicle and tariff selections
+                delete updatedPrefs.selectedVehicleId;
+                delete updatedPrefs.vehicleId;
+                delete updatedPrefs.selectedTariffId;
+                delete updatedPrefs.tariffId;
+                // Keep dispatch status as OFFLINE
+                if (updatedPrefs.dispatch) {
+                    updatedPrefs.dispatch.status = 'OFFLINE';
+                    updatedPrefs.dispatch.lastStatusUpdate = new Date().toISOString();
+                }
+
+                await prisma.user.update({
+                    where: { id: userId },
+                    data: { preferences: updatedPrefs }
+                });
+                console.log(`🗑️ Cleared vehicle & tariff from user.preferences for driver ${userId}`);
+            }
+
+            // 3️⃣ Unassign vehicle from driver (vehicles.driverId)
+            await prisma.vehicles.updateMany({
+                where: { driverId: userId },
+                data: { driverId: null }
+            });
+            console.log(`🚗 Unassigned vehicles from driver ${userId}`);
+
+        } catch (cleanupError) {
+            console.error('⚠️ Failed to clear vehicle/tariff on shift end:', cleanupError?.message || cleanupError);
+            // Don't fail the entire request - shift is already ended
+        }
+
         const companyId = updatedShift.companyId;
         const eventTimestamp = new Date().toISOString();
 

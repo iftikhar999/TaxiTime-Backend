@@ -240,6 +240,7 @@ router.post('/:type', async (req, res) => {
                     data: {
                         id: createId(),
                         name: data.name,
+                        code: data.code || data.name.toUpperCase().replace(/\s+/g, '_').substring(0, 20),
                         description: data.description,
                         multiplier: data.multiplier || 1.0,
                         isActive: data.isActive || true,

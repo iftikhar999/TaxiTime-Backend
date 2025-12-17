@@ -1,6 +1,7 @@
 const express = require('express');
 const { PrismaClient } = require('@prisma/client');
 const bcrypt = require('bcryptjs');
+const { createId } = require('@paralleldrive/cuid2');
 const { authenticateToken, authorizeRoles } = require('../middleware/auth');
 
 const router = express.Router();
@@ -380,6 +381,7 @@ router.post('/', async (req, res) => {
         const cleanCompanyId = companyId && companyId.trim() !== '' ? companyId.trim() : null;
 
         const userData = {
+            id: createId(),
             firstName,
             lastName,
             email,
@@ -389,6 +391,7 @@ router.post('/', async (req, res) => {
             companyId: cleanCompanyId,
             isActive: isActive !== undefined ? isActive : true,
             isVerified: isVerified !== undefined ? isVerified : false,
+            updatedAt: new Date(),
         };
 
         // Add optional fields if provided

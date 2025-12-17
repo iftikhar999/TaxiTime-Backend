@@ -1726,6 +1726,111 @@ router.get(
   }
 );
 
+// GET /api/dispatch/jobs - List jobs (for driver app nearby jobs, dispatch portal)
+router.get('/jobs', authenticateToken, async (req, res) => {
+  try {
+    const { companyId, userId, role } = req.user;
+    const { status, limit = 50, zoneId, serviceType } = req.query;
+    
+    console.log(`[Dispatch GET /jobs] User: ${userId}, Role: ${role}, CompanyId: ${companyId}`);
+    
+    // Build where clause
+    const where = {};
+    
+    // Filter by company
+    if (companyId) {
+      where.companyId = companyId;
+    }
+    
+    // Filter by status(es) - support comma-separated
+    if (status) {
+      const statusList = status.split(',').map(s => s.trim().toUpperCase());
+      where.status = { in: statusList };
+    }
+    
+    // Filter by zone
+    if (zoneId) {
+      where.zoneId = zoneId;
+    }
+    
+    // Filter by service type
+    if (serviceType) {
+      where.serviceType = serviceType.toUpperCase();
+    }
+    
+    const jobs = await prisma.job.findMany({
+      where,
+      take: Math.min(parseInt(limit) || 50, 100),
+      orderBy: { createdAt: 'desc' },
+      include: {
+        customer: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            phone: true,
+          },
+        },
+        tariff: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
+        zone: {
+          select: {
+            id: true,
+            zoneName: true,
+          },
+        },
+      },
+    });
+    
+    // Map to simpler format
+    const mappedJobs = jobs.map(job => ({
+      id: job.id,
+      publicJobId: job.publicJobId,
+      jobId: job.jobId || job.publicJobId,
+      status: job.status,
+      serviceType: job.serviceType || 'TAXI',
+      pickupAddress: job.pickupAddress,
+      pickupLatitude: job.pickupLatitude ? parseFloat(job.pickupLatitude) : null,
+      pickupLongitude: job.pickupLongitude ? parseFloat(job.pickupLongitude) : null,
+      dropoffAddress: job.dropoffAddress,
+      dropoffLatitude: job.dropoffLatitude ? parseFloat(job.dropoffLatitude) : null,
+      dropoffLongitude: job.dropoffLongitude ? parseFloat(job.dropoffLongitude) : null,
+      estimatedPrice: job.estimatedPrice ? parseFloat(job.estimatedPrice) : null,
+      estimatedFare: job.estimatedPrice ? parseFloat(job.estimatedPrice) : null,
+      fare: job.actualFare ? parseFloat(job.actualFare) : null,
+      estimatedDistance: job.estimatedDistance ? parseFloat(job.estimatedDistance) : null,
+      customer: job.customer,
+      tariff: job.tariff,
+      tariffName: job.tariff?.name,
+      zone: job.zone,
+      zoneId: job.zoneId,
+      vehicleType: job.vehicleType,
+      scheduledTime: job.scheduledTime,
+      createdAt: job.createdAt,
+      assignedDriverId: job.assignedDriverId,
+    }));
+    
+    console.log(`[Dispatch] GET /jobs - Found ${mappedJobs.length} jobs for company ${companyId}`);
+    
+    res.json({
+      success: true,
+      jobs: mappedJobs,
+      data: mappedJobs, // Also include as data for compatibility
+    });
+  } catch (error) {
+    console.error('Error fetching jobs:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch jobs',
+      error: error.message,
+    });
+  }
+});
+
 // Create a new job (taxi/delivery/courier)
 router.post('/jobs', authenticateToken, authorizeRoles(...allowedDispatchRoles), async (req, res) => {
   try {
@@ -3085,6 +3190,304 @@ router.get(
       res.status(500).json({
         success: false,
         error: 'Failed to fetch job audit logs',
+      });
+    }
+  }
+);
+
+// ============================================================================
+// DRIVER KICK MANAGEMENT
+// ============================================================================
+
+/**
+ * @route   POST /api/dispatch/drivers/:driverId/kick
+ * @desc    Kick a driver - force logout immediately if no active job, 
+ *          or schedule kick after job completion
+ * @access  DISPATCHER, OWNER, COMPANY_ADMIN, ADMIN, SUPER_ADMIN
+ */
+router.post(
+  '/drivers/:driverId/kick',
+  authenticateToken,
+  authorizeRoles(...allowedDispatchRoles),
+  async (req, res) => {
+    try {
+      const { driverId } = req.params;
+      const { reason } = req.body;
+      const kickedBy = req.user.id;
+
+      console.log(`[Dispatch] Kick driver request: ${driverId} by ${kickedBy}`);
+
+      // Verify driver exists and belongs to same company (unless super admin)
+      const driver = await prisma.user.findFirst({
+        where: {
+          id: driverId,
+          role: 'DRIVER',
+          ...(req.user.role !== 'SUPER_ADMIN' && req.user.role !== 'ADMIN' 
+            ? { companyId: req.user.companyId } 
+            : {}),
+        },
+        include: {
+          company: { select: { id: true, brandName: true } },
+        },
+      });
+
+      if (!driver) {
+        return res.status(404).json({
+          success: false,
+          error: 'Driver not found or access denied',
+        });
+      }
+
+      // Check if driver has an active job (non-completed statuses)
+      const activeJob = await prisma.job.findFirst({
+        where: {
+          assignedDriverId: driverId,
+          status: {
+            in: ['ASSIGNED', 'ACCEPTED', 'ON_THE_WAY', 'ARRIVED', 'ACTIVE', 'IN_PROGRESS', 'STARTED'],
+          },
+        },
+        select: {
+          id: true,
+          reference: true,
+          status: true,
+        },
+      });
+
+      const driverNamespace = global.driverNamespace;
+      const dispatchNamespace = global.dispatchNamespace;
+
+      if (activeJob) {
+        // Driver has active job - schedule pending kick
+        console.log(`[Dispatch] Driver ${driverId} has active job ${activeJob.id}, scheduling pending kick`);
+
+        // Store pending kick in driver preferences
+        await prisma.user.update({
+          where: { id: driverId },
+          data: {
+            preferences: {
+              ...(driver.preferences || {}),
+              pendingKick: {
+                scheduledAt: new Date().toISOString(),
+                reason: reason || 'Kicked by dispatcher',
+                kickedBy,
+                activeJobId: activeJob.id,
+              },
+            },
+          },
+        });
+
+        // Notify dispatch that kick is pending
+        if (dispatchNamespace) {
+          dispatchNamespace.to(`dispatch_${driver.companyId}`).emit('driver:kick:pending', {
+            driverId,
+            driverName: `${driver.firstName} ${driver.lastName}`,
+            reason: reason || 'Kicked by dispatcher',
+            activeJobId: activeJob.id,
+            activeJobRef: activeJob.reference,
+            message: `Driver will be kicked after completing job #${activeJob.reference || activeJob.id.slice(-6)}`,
+          });
+        }
+
+        return res.json({
+          success: true,
+          kickedImmediately: false,
+          message: `Driver has active job. Will be kicked after job completion.`,
+          activeJob: {
+            id: activeJob.id,
+            reference: activeJob.reference,
+            status: activeJob.status,
+          },
+        });
+
+      } else {
+        // No active job - kick immediately
+        console.log(`[Dispatch] Kicking driver ${driverId} immediately`);
+
+        // Clear any pending kick and mark as kicked
+        await prisma.user.update({
+          where: { id: driverId },
+          data: {
+            preferences: {
+              ...(driver.preferences || {}),
+              pendingKick: null,
+              lastKick: {
+                kickedAt: new Date().toISOString(),
+                reason: reason || 'Kicked by dispatcher',
+                kickedBy,
+              },
+            },
+          },
+        });
+
+        // End any active shift
+        await prisma.driverShift.updateMany({
+          where: {
+            driverId,
+            endTime: null,
+          },
+          data: {
+            endTime: new Date(),
+            endReason: 'KICKED_BY_DISPATCHER',
+          },
+        });
+
+        // Send kick event to driver app
+        if (driverNamespace) {
+          driverNamespace.to(`driver_${driverId}`).emit('driver:kicked', {
+            reason: reason || 'You have been logged out by the dispatcher',
+            kickedBy: `${req.user.firstName} ${req.user.lastName}`,
+            timestamp: new Date().toISOString(),
+          });
+        }
+
+        // Notify dispatch
+        if (dispatchNamespace) {
+          dispatchNamespace.to(`dispatch_${driver.companyId}`).emit('driver:kicked', {
+            driverId,
+            driverName: `${driver.firstName} ${driver.lastName}`,
+            reason: reason || 'Kicked by dispatcher',
+            kickedBy: `${req.user.firstName} ${req.user.lastName}`,
+          });
+
+          // Also emit driver offline event
+          dispatchNamespace.to(`dispatch_${driver.companyId}`).emit('driver:offline', {
+            driverId,
+            driverName: `${driver.firstName} ${driver.lastName}`,
+            reason: 'kicked',
+          });
+        }
+
+        return res.json({
+          success: true,
+          kickedImmediately: true,
+          message: 'Driver has been kicked successfully',
+        });
+      }
+
+    } catch (error) {
+      console.error('[Dispatch] Error kicking driver:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to kick driver',
+        details: process.env.NODE_ENV === 'development' ? error.message : undefined,
+      });
+    }
+  }
+);
+
+/**
+ * @route   DELETE /api/dispatch/drivers/:driverId/kick
+ * @desc    Cancel a pending kick for a driver
+ * @access  DISPATCHER, OWNER, COMPANY_ADMIN, ADMIN, SUPER_ADMIN
+ */
+router.delete(
+  '/drivers/:driverId/kick',
+  authenticateToken,
+  authorizeRoles(...allowedDispatchRoles),
+  async (req, res) => {
+    try {
+      const { driverId } = req.params;
+
+      const driver = await prisma.user.findFirst({
+        where: {
+          id: driverId,
+          role: 'DRIVER',
+          ...(req.user.role !== 'SUPER_ADMIN' && req.user.role !== 'ADMIN' 
+            ? { companyId: req.user.companyId } 
+            : {}),
+        },
+      });
+
+      if (!driver) {
+        return res.status(404).json({
+          success: false,
+          error: 'Driver not found or access denied',
+        });
+      }
+
+      // Clear pending kick
+      const preferences = driver.preferences || {};
+      delete preferences.pendingKick;
+
+      await prisma.user.update({
+        where: { id: driverId },
+        data: { preferences },
+      });
+
+      // Notify dispatch
+      const dispatchNamespace = global.dispatchNamespace;
+      if (dispatchNamespace) {
+        dispatchNamespace.to(`dispatch_${driver.companyId}`).emit('driver:kick:cancelled', {
+          driverId,
+          driverName: `${driver.firstName} ${driver.lastName}`,
+          cancelledBy: `${req.user.firstName} ${req.user.lastName}`,
+        });
+      }
+
+      res.json({
+        success: true,
+        message: 'Pending kick cancelled',
+      });
+
+    } catch (error) {
+      console.error('[Dispatch] Error cancelling kick:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to cancel kick',
+      });
+    }
+  }
+);
+
+/**
+ * @route   GET /api/dispatch/drivers/:driverId/kick-status
+ * @desc    Get kick status for a driver
+ * @access  DISPATCHER, OWNER, COMPANY_ADMIN, ADMIN, SUPER_ADMIN
+ */
+router.get(
+  '/drivers/:driverId/kick-status',
+  authenticateToken,
+  authorizeRoles(...allowedDispatchRoles),
+  async (req, res) => {
+    try {
+      const { driverId } = req.params;
+
+      const driver = await prisma.user.findFirst({
+        where: {
+          id: driverId,
+          role: 'DRIVER',
+          ...(req.user.role !== 'SUPER_ADMIN' && req.user.role !== 'ADMIN' 
+            ? { companyId: req.user.companyId } 
+            : {}),
+        },
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          preferences: true,
+        },
+      });
+
+      if (!driver) {
+        return res.status(404).json({
+          success: false,
+          error: 'Driver not found',
+        });
+      }
+
+      const pendingKick = driver.preferences?.pendingKick;
+
+      res.json({
+        success: true,
+        hasPendingKick: !!pendingKick,
+        pendingKick: pendingKick || null,
+      });
+
+    } catch (error) {
+      console.error('[Dispatch] Error fetching kick status:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to fetch kick status',
       });
     }
   }
